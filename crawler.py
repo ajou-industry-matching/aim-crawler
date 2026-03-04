@@ -9,6 +9,7 @@ import csv
 import json
 import time
 import requests
+import pymysql
 from bs4 import BeautifulSoup
 
 # ─────────────────────────────────────────────
@@ -217,7 +218,71 @@ def download_image(img_url: str, uid: str, save_dir: str) -> str | None:
         return None
 
 
-# 4. CSV 저장 (텍스트 요약)
+# 4. MySQL 저장
+
+def get_db_connection():
+    """환경변수에서 DB 접속 정보를 읽어 연결을 반환합니다."""
+    return pymysql.connect(
+        host     = os.environ.get("DB_HOST", "localhost"),
+        port     = int(os.environ.get("DB_PORT", 3306)),
+        user     = os.environ.get("DB_USER", "root"),
+        password = os.environ.get("DB_PASSWORD", ""),
+        database = os.environ.get("DB_NAME", "softcon"),
+        charset  = "utf8mb4",
+        cursorclass = pymysql.cursors.DictCursor,
+    )
+
+def save_to_db(details_list: list[dict]) -> None:
+    """크롤링 결과를 MySQL에 저장합니다. (중복 uid는 UPDATE)"""
+    if not details_list:
+        return
+
+    # ✏️  테이블명과 컬럼명을 실제 DB에 맞게 수정하세요
+    sql = """
+        INSERT INTO projects (
+            uid, term, title, summary, description,
+            git_repository, presentation_url, video_url,
+            representative_image, url
+        ) VALUES (
+            %(uid)s, %(term)s, %(title)s, %(summary)s, %(description)s,
+            %(gitRepository)s, %(presentationUrl)s, %(videoUrl)s,
+            %(representativeImage)s, %(url)s
+        )
+        ON DUPLICATE KEY UPDATE
+            title               = VALUES(title),
+            summary             = VALUES(summary),
+            description         = VALUES(description),
+            git_repository      = VALUES(git_repository),
+            presentation_url    = VALUES(presentation_url),
+            video_url           = VALUES(video_url),
+            representative_image = VALUES(representative_image)
+    """
+
+    try:
+        conn = get_db_connection()
+        with conn:
+            with conn.cursor() as cursor:
+                for d in details_list:
+                    row = {
+                        "uid":                 d.get("uid"),
+                        "term":                d.get("term"),
+                        "title":               d.get("title", ""),
+                        "summary":             d.get("summary", ""),
+                        "description":         d.get("description", ""),
+                        "gitRepository":       d.get("gitRepository", ""),
+                        "presentationUrl":     d.get("presentationUrl", ""),
+                        "videoUrl":            d.get("videoUrl", ""),
+                        "representativeImage": d.get("representativeImage", ""),
+                        "url":                 d.get("url", ""),
+                    }
+                    cursor.execute(sql, row)
+            conn.commit()
+        print(f"[OK] DB 저장 완료 ({len(details_list)}건)")
+    except pymysql.Error as e:
+        print(f"[DB ERROR] {e}")
+
+
+# 5. CSV 저장 (텍스트 요약)
 
 def save_csv(details_list: list[dict], path: str) -> None:
     # 주요 텍스트 필드를 CSV로 저장
@@ -256,16 +321,14 @@ def main():
     print("=" * 50)
 
     # 모드 선택
-    print("\n1. 현재 작품 목록\n2. 이전 작품 목록 (학기별)")
-    mode     = input("선택 (1 또는 2, 기본값 1): ").strip() or "1"
-    category = input(f"카테고리 {list(CATEGORY_MAP.keys())} (기본값 S): ").strip().upper() or "S"
-    max_n    = int(input(f"최대 프로젝트 수 (기본값 {MAX_PROJECTS}): ").strip() or MAX_PROJECTS)
+    # 환경변수에서 설정값을 읽어옴 (Cloud Run용)
+    # 로컬 실행 시 터미널에서 직접 지정: LIST_TYPE=current CATEGORY=S python3 crawler.py
+    mode      = os.environ.get("LIST_TYPE", "current")          # current / previous
+    category  = os.environ.get("CATEGORY", "S").upper()         # S / D / C / I
+    max_n     = int(os.environ.get("MAX_PROJECTS", MAX_PROJECTS))
+    term      = os.environ.get("TERM", "2024-1") if mode == "previous" else None
 
-    term = None
-    if mode == "2":
-        term = input("학기 입력 (예: 2024-1, 기본값 2024-1): ").strip() or "2024-1"
-
-    list_type = "current" if mode == "1" else "previous"
+    list_type = mode  # current / previous
 
     # 1. 링크 수집
     projects = get_project_links(list_type, category, term)
@@ -310,6 +373,9 @@ def main():
     # 4. CSV 저장
     csv_path = os.path.join(DATA_DIR, "result.csv")
     save_csv(details_list, csv_path)
+
+    # 5. DB 저장
+    save_to_db(details_list)
 
     # 결과 요약
     print("\n" + "=" * 50)
