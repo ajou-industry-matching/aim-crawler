@@ -1,0 +1,146 @@
+name: Deploy Cloud Run Job
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      execute_job:
+        description: "Deploy 후 Cloud Run Job을 즉시 실행"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'ajou-project-cafd9' }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'asia-northeast3' }}
+  ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY || 'crawler-repo' }}
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || 'softcon-crawler' }}
+  CLOUD_RUN_JOB_NAME: ${{ vars.CLOUD_RUN_JOB_NAME || 'softcon-crawler' }}
+  LIST_TYPE: ${{ vars.LIST_TYPE || 'current' }}
+  CATEGORY: ${{ vars.CATEGORY || 'S' }}
+  MAX_PROJECTS: ${{ vars.MAX_PROJECTS || '50' }}
+  TERM: ${{ vars.TERM || '2024-1' }}
+  DB_HOST: ${{ vars.DB_HOST || '161.33.46.41' }}
+  DB_PORT: ${{ vars.DB_PORT || '3306' }}
+  DB_USER: ${{ vars.DB_USER || 'aim_be' }}
+  DB_NAME: ${{ vars.DB_NAME || 'aim' }}
+  CRAWLER_USER_ID: ${{ vars.CRAWLER_USER_ID }}
+  DB_AUTO_CREATE_CRAWLER_USER: ${{ vars.DB_AUTO_CREATE_CRAWLER_USER || 'true' }}
+  CRAWLER_USER_EMAIL: ${{ vars.CRAWLER_USER_EMAIL || 'softcon-crawler@aim.local' }}
+  CRAWLER_USER_FIREBASE_UID: ${{ vars.CRAWLER_USER_FIREBASE_UID || 'softcon-crawler' }}
+  CRAWLER_USER_NAME: ${{ vars.CRAWLER_USER_NAME || 'Softcon Crawler' }}
+  DB_POST_TABLE: ${{ vars.DB_POST_TABLE || 'posts' }}
+  DB_USER_TABLE: ${{ vars.DB_USER_TABLE || 'users' }}
+
+jobs:
+  deploy:
+    name: Build image and update Cloud Run Job
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        env:
+          GCP_SA_KEY_SET: ${{ secrets.GCP_SA_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$GCP_SA_KEY_SET" != "true" ]; then
+            echo "GitHub Secret GCP_SA_KEY is required." >&2
+            exit 1
+          fi
+
+          missing=0
+          for name in GCP_PROJECT_ID GCP_REGION ARTIFACT_REGISTRY_REPOSITORY IMAGE_NAME CLOUD_RUN_JOB_NAME LIST_TYPE CATEGORY MAX_PROJECTS DB_HOST DB_PORT DB_USER DB_NAME DB_POST_TABLE DB_USER_TABLE; do
+            if [ -z "${!name}" ]; then
+              echo "$name is required." >&2
+              missing=1
+            fi
+          done
+          if ! [[ "$DB_PORT" =~ ^[0-9]+$ ]]; then
+            echo "DB_PORT must be numeric." >&2
+            missing=1
+          fi
+          if [ -n "$CRAWLER_USER_ID" ] && ! [[ "$CRAWLER_USER_ID" =~ ^[0-9]+$ ]]; then
+            echo "CRAWLER_USER_ID must be numeric." >&2
+            missing=1
+          fi
+          if [ -z "$CRAWLER_USER_ID" ] && [ "$DB_AUTO_CREATE_CRAWLER_USER" != "true" ]; then
+            echo "Set CRAWLER_USER_ID or DB_AUTO_CREATE_CRAWLER_USER=true." >&2
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Ensure DB password secret exists
+        env:
+          DB_PASSWORD_VALUE: ${{ secrets.DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "$DB_PASSWORD_VALUE" ]; then
+            if gcloud secrets describe DB_PASSWORD --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
+              printf %s "$DB_PASSWORD_VALUE" | gcloud secrets versions add DB_PASSWORD --project "$GCP_PROJECT_ID" --data-file=-
+            else
+              printf %s "$DB_PASSWORD_VALUE" | gcloud secrets create DB_PASSWORD --project "$GCP_PROJECT_ID" --data-file=- --replication-policy=automatic
+            fi
+          fi
+
+          if ! gcloud secrets describe DB_PASSWORD --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
+            echo "GCP Secret Manager secret DB_PASSWORD does not exist. Add GitHub Secret DB_PASSWORD once, or create the GCP secret manually." >&2
+            exit 1
+          fi
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        id: image
+        run: |
+          set -euo pipefail
+          image_uri="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker build -t "$image_uri" .
+          docker push "$image_uri"
+          echo "image_uri=$image_uri" >> "$GITHUB_OUTPUT"
+
+      - name: Update Cloud Run Job
+        run: |
+          set -euo pipefail
+          env_vars="LIST_TYPE=${LIST_TYPE},CATEGORY=${CATEGORY},MAX_PROJECTS=${MAX_PROJECTS},TERM=${TERM},DB_HOST=${DB_HOST},DB_PORT=${DB_PORT},DB_USER=${DB_USER},DB_NAME=${DB_NAME},DB_AUTO_CREATE_CRAWLER_USER=${DB_AUTO_CREATE_CRAWLER_USER},CRAWLER_USER_EMAIL=${CRAWLER_USER_EMAIL},CRAWLER_USER_FIREBASE_UID=${CRAWLER_USER_FIREBASE_UID},CRAWLER_USER_NAME=${CRAWLER_USER_NAME},DB_POST_TABLE=${DB_POST_TABLE},DB_USER_TABLE=${DB_USER_TABLE}"
+          if [ -n "$CRAWLER_USER_ID" ]; then
+            env_vars="${env_vars},CRAWLER_USER_ID=${CRAWLER_USER_ID}"
+          fi
+
+          gcloud run jobs update "$CLOUD_RUN_JOB_NAME" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --image "${{ steps.image.outputs.image_uri }}" \
+            --update-env-vars "$env_vars" \
+            --update-secrets "DB_PASSWORD=DB_PASSWORD:latest"
+
+      - name: Execute Cloud Run Job
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.execute_job == 'true' }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$CLOUD_RUN_JOB_NAME" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --wait
