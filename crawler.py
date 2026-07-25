@@ -444,6 +444,9 @@ def resolve_crawler_user_id(cursor, config: dict) -> int:
     if not config.get("auto_create_crawler_user"):
         raise RuntimeError("CRAWLER_USER_ID가 없고 DB_AUTO_CREATE_CRAWLER_USER가 꺼져 있습니다.")
 
+    # admin_role은 백엔드 AdminRole enum(NONE/ADMIN/SUPER_ADMIN) 문자열 값으로 저장한다.
+    # (백엔드 User.userRole/userStatus와 동일하게 @Enumerated(STRING) 매핑을 전제.
+    #  크롤러 유저는 콘텐츠 작성용 시스템 계정이라 관리자 권한이 없는 NONE으로 둔다.)
     cursor.execute(
         f"""
         INSERT INTO {user_table} (
@@ -451,12 +454,13 @@ def resolve_crawler_user_id(cursor, config: dict) -> int:
             department, email, firebase_uid, name,
             provider, user_role, user_status
         ) VALUES (
-            1, NOW(), NOW(),
+            %s, NOW(), NOW(),
             %s, %s, %s, %s,
             %s, %s, %s
         )
         """,
         (
+            "NONE",
             "AIM",
             config["crawler_user_email"],
             config["crawler_user_firebase_uid"],

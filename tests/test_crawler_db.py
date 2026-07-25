@@ -1,6 +1,6 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import crawler
 
@@ -79,6 +79,29 @@ class CrawlerDbConfigTest(unittest.TestCase):
         self.assertEqual(row["description"], "설명")
         self.assertEqual(row["thumbnail_storage_key"], "softcon:2024-1:123")
         self.assertEqual(row["visibility"], "PUBLIC")
+
+    def test_auto_created_crawler_user_uses_string_admin_role(self):
+        # 백엔드 AdminRole enum이 문자열(NONE/ADMIN/SUPER_ADMIN)이므로
+        # 자동 생성 유저의 admin_role도 정수가 아닌 문자열 "NONE"으로 들어가야 한다.
+        cursor = MagicMock()
+        cursor.fetchone.return_value = None  # 기존 크롤러 유저 없음 → INSERT 경로
+        cursor.lastrowid = 99
+        config = {
+            "crawler_user_id": None,
+            "user_table": "users",
+            "auto_create_crawler_user": True,
+            "crawler_user_firebase_uid": "softcon-crawler",
+            "crawler_user_email": "softcon-crawler@aim.local",
+            "crawler_user_name": "Softcon Crawler",
+        }
+
+        user_id = crawler.resolve_crawler_user_id(cursor, config)
+
+        self.assertEqual(user_id, 99)
+        insert_call = cursor.execute.call_args_list[-1]
+        insert_params = insert_call.args[1]
+        self.assertEqual(insert_params[0], "NONE")
+        self.assertNotIn(1, insert_params)
 
 
 if __name__ == "__main__":
