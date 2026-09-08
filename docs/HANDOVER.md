@@ -64,7 +64,7 @@ python crawler.py
 - 멱등: 백엔드가 `(uid, term)` 기준 upsert라 재전송해도 안전하다.
 
 ### DB 직접 적재 (레거시)
-- 운영 DB는 Oracle Cloud MySQL `161.33.46.41:3306/aim`, 테이블 소문자 `posts`/`users`.
+- 운영 DB는 Oracle Cloud MySQL. 접속 정보(host/port/db)와 비밀번호는 공개 저장소에 두지 않고 GCP Secret Manager 및 접근 통제된 운영 문서에서 관리한다. 테이블은 소문자 `posts`/`users`.
 - `posts.user_id` FK 때문에 크롤러 전용 시스템 유저를 자동 생성하는 옵션이 있다.
 - 시크릿(DB 비밀번호 등)은 GitHub Actions Secret/Variable과 GCP Secret Manager로 주입한다.
 
