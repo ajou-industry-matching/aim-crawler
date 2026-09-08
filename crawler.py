@@ -5,6 +5,7 @@
 """
 
 import os
+import copy
 import csv
 import hashlib
 import json
@@ -588,7 +589,31 @@ def save_csv(details_list: list[dict], path: str) -> None:
 
 # 6. API 전송
 
-def post_to_api(details_list: list[dict]) -> None:
+def mask_email(raw: str | None) -> str | None:
+    # 이메일 로컬 파트를 가린다. 콤마로 여러 주소가 올 수 있어 각각 처리하고,
+    # 짧은 로컬(1자 이하)은 원문 문자를 남기지 않는다.
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    masked = []
+    for part in (p.strip() for p in raw.split(",")):
+        if not part:
+            continue
+        if "@" not in part:
+            masked.append("***")
+            continue
+        local, domain = part.split("@", 1)
+        if len(local) > 3:
+            prefix = local[:3]
+        elif len(local) > 1:
+            prefix = local[:1]
+        else:
+            prefix = ""
+        masked.append(f"{prefix}**@{domain}")
+    return ", ".join(masked) if masked else None
+
+
+def post_to_api(details_list: list[dict]) -> int:
     import requests
 
     api_base = os.environ.get("BACKEND_API_BASE_URL")
@@ -610,28 +635,28 @@ def post_to_api(details_list: list[dict]) -> None:
     for d in details_list:
         members = []
         for m in d.get("teamInfo", {}).get("members", []):
-            raw_email = m.get("email", "").strip()
-            masked_email = None
-            if raw_email and "@" in raw_email:
-                local, domain = raw_email.split("@", 1)
-                prefix = local[:3] if len(local) > 3 else local[:1]
-                masked_email = f"{prefix}**@{domain}"
-            
             members.append({
                 "role": m.get("role", ""),
                 "name": m.get("name", ""),
-                "maskedEmail": masked_email,
+                "maskedEmail": mask_email(m.get("email")),
                 "department": m.get("department", ""),
                 "grade": m.get("grade", "")
             })
 
-        # content에는 원본 이메일이 담긴 teamInfo를 넣지 않는다(참여자는 members로 마스킹해 전송).
-        content_source = {**d, "teamInfo": None}
+        # content에는 teamInfo를 유지하되(등록자/멘토 정보 보존) 이메일만 마스킹해 원문 유출을 막는다.
+        masked_team = copy.deepcopy(d.get("teamInfo") or {})
+        reg = masked_team.get("registrant")
+        if isinstance(reg, dict) and reg.get("email"):
+            reg["email"] = mask_email(reg["email"])
+        for mm in masked_team.get("members", []):
+            if mm.get("email"):
+                mm["email"] = mask_email(mm["email"])
+        content_source = {**d, "teamInfo": masked_team}
 
         payload = {
             "uid": d.get("uid"),
             "term": d.get("term"),
-            "title": d.get("title", "제목 없음"),
+            "title": d.get("title") or "제목 없음",
             "summary": d.get("summary", ""),
             "description": d.get("description", ""),
             "content": build_post_content(content_source),
@@ -644,13 +669,24 @@ def post_to_api(details_list: list[dict]) -> None:
             "members": members
         }
 
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=10)
-            resp.raise_for_status()
+        sent = False
+        for attempt in range(3):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=10, allow_redirects=False)
+                # 리다이렉트(로그인 페이지 등)를 성공으로 집계하지 않도록 2xx만 성공 처리.
+                if not (200 <= resp.status_code < 300):
+                    raise requests.HTTPError(f"unexpected status {resp.status_code}")
+                sent = True
+                break
+            except Exception as e:
+                if attempt == 2:
+                    print(f"  [API ERROR] UID {d.get('uid')} 전송 실패: {e}")
+                else:
+                    time.sleep(DELAY)
+        if sent:
             success += 1
             print(f"  [API OK] UID {d.get('uid')}")
-        except Exception as e:
-            print(f"  [API ERROR] UID {d.get('uid')} 전송 실패: {e}")
+        else:
             fail += 1
 
     if fail:
