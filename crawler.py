@@ -248,12 +248,13 @@ def get_project_details(project_url: str) -> dict:
             details["videoUrl"] = video_iframe.get("src", "").strip()
 
         # 대표 이미지 URL
-        rep_image = soup.select_one(".dw_title div img")
+        rep_image = soup.select_one(".countsort img")
         if rep_image and rep_image.has_attr("src"):
             img_src = rep_image["src"]
-            if img_src.startswith("./") or img_src.startswith("/"):
-                img_src = BASE_URL + img_src.replace("./", "/")
-            details["representativeImage"] = img_src
+            if "no_registrant" not in img_src and "movie_noimg" not in img_src:
+                if img_src.startswith("./") or img_src.startswith("/"):
+                    img_src = BASE_URL + img_src.replace("./", "/")
+                details["representativeImage"] = img_src
 
         return details
 
