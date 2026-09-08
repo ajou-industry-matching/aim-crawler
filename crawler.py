@@ -121,13 +121,12 @@ def get_all_project_links() -> list[dict]:
                 soup = BeautifulSoup(text, "html.parser")
                 links = soup.select("a")
                 
-                has_uid = False
+                page_new = 0
                 for link in links:
                     href = link.get("href", "")
                     if "uid=" not in href or "javascript:" in href:
                         continue
                     
-                    has_uid = True
 
                     full_url = urljoin(BASE_URL, href)
                     uid = full_url.split("uid=")[1].split("&")[0] if "uid=" in full_url else None
@@ -135,6 +134,7 @@ def get_all_project_links() -> list[dict]:
                         continue
                         
                     seen_uids.add(uid)
+                    page_new += 1
                     projects.append({
                         "title": link.text.strip() or "제목 없음",
                         "url": full_url,
@@ -143,7 +143,8 @@ def get_all_project_links() -> list[dict]:
                         "category": cat,
                     })
                 
-                if not has_uid:
+                # 새 uid가 없으면(빈 페이지 또는 전부 중복) 종료해 무한 루프를 막는다.
+                if page_new == 0:
                     break
                 
                 page += 1
