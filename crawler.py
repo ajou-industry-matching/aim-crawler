@@ -5,17 +5,21 @@
 """
 
 import os
+import copy
 import csv
 import hashlib
 import json
 import re
+import sys
 import time
+from datetime import date
+from urllib.parse import urljoin
 
 # ─────────────────────────────────────────────
 # 설정
 BASE_URL     = "https://softcon.ajou.ac.kr"
 DELAY        = 1.0   # 요청 간 대기 시간 (초)
-MAX_PROJECTS = 50    # 한 번에 크롤링할 최대 프로젝트 수
+MAX_PROJECTS = None  # 한 번에 크롤링할 최대 프로젝트 수 (None이면 무제한)
 # ─────────────────────────────────────────────
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -58,59 +62,96 @@ MAX_VARCHAR_LENGTH = 255
 
 # 1. 목록 페이지에서 프로젝트 링크 수집
 
-def get_project_links(list_type: str = "current", category: str = "S", term: str = None) -> list[dict]:
-    # 목록 페이지에서 프로젝트 링크를 추출
+def get_all_project_links() -> list[dict]:
+    # 모든 학기 및 카테고리의 프로젝트 링크를 추출 (AJAX 페이징 활용)
     import requests
     from bs4 import BeautifulSoup
 
-    if list_type == "current":
-        url = f"{BASE_URL}/works/works_list.asp?category={category}"
-    else:
-        if not term:
-            raise ValueError("이전 작품 목록을 가져오려면 학기(term)가 필요합니다.")
-        url = f"{BASE_URL}/works/works_list_prev.asp?category={category}&wTerm={term}"
-
-    print(f"[목록] {url}")
-
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[ERROR] 목록 페이지 요청 실패: {e}")
-        return []
-
-    soup = BeautifulSoup(response.text, "html.parser")
     projects = []
-    seen_urls = set()
+    seen_uids = set()
 
-    for link in soup.select("a"):
-        href = link.get("href", "")
-        if ("works.asp?uid=" not in href and "works_prev.asp?uid=" not in href) or "javascript:" in href:
-            continue
+    print("[목록] 학기(terms) 추출 중...")
+    try:
+        url_terms = f"{BASE_URL}/works/works_list_prev.asp?category=S&wTerm=2024-2"
+        res_terms = requests.get(url_terms, headers=HEADERS, timeout=10)
+        res_terms.raise_for_status()
+        terms = sorted(set(re.findall(r"wTerm=(\d{4}-\d)", res_terms.text)))
+    except Exception as e:
+        print(f"[ERROR] 학기 추출 실패: {e}")
+        terms = []
+    
+    if not terms:
+        # 폴백: 정기 실행 중 추출이 실패해도 크롤링을 통째로 중단하지 않는다.
+        # 고정 목록 대신 현재 연도까지 동적으로 생성해 이후 학기 누락을 막는다.
+        cur_year = date.today().year
+        terms = [f"{y}-{s}" for y in range(2020, cur_year + 1) for s in (1, 2)]
+        print(f"[경고] 학기 목록 추출 실패로 폴백합니다. 범위: {terms[0]} ~ {terms[-1]}")
 
-        # 절대 URL 변환
-        if href.startswith("./") or href.startswith("/"):
-            full_url = BASE_URL + href.replace("./", "/")
-        elif not href.startswith("http"):
-            full_url = BASE_URL + "/" + href
-        else:
-            full_url = href
+    print(f"  → 학기 목록: {terms}")
 
-        if full_url in seen_urls:
-            continue
-        seen_urls.add(full_url)
+    categories = ["S", "W", "I", "A", "D", "C"]
+    
+    ajax_url = f"{BASE_URL}/common/ajax_file/work_list_ajax.asp"
+    ajax_headers = dict(HEADERS)
+    ajax_headers["X-Requested-With"] = "XMLHttpRequest"
 
-        uid        = full_url.split("?uid=")[1].split("&")[0] if "?uid=" in full_url else None
-        term_value = full_url.split("wTerm=")[1].split("&")[0] if "wTerm=" in full_url else None
+    for term_val in terms:
+        for cat in categories:
+            page = 1
+            while True:
+                data = {"page": page, "category": cat, "wTerm": term_val}
+                res = None
+                for attempt in range(3):
+                    try:
+                        res = requests.post(ajax_url, headers=ajax_headers, data=data, timeout=10)
+                        res.raise_for_status()
+                        break
+                    except requests.RequestException as e:
+                        if attempt == 2:
+                            # 재시도 후에도 실패하면 조용히 성공 처리하지 않고 경고로 드러낸다(부분 수집).
+                            print(f"[경고] AJAX 3회 실패, 부분 수집 ({term_val}, {cat}, page={page}): {e}")
+                        else:
+                            time.sleep(DELAY)
+                if res is None:
+                    break
 
-        projects.append({
-            "title": link.text.strip() or "제목 없음",
-            "url":   full_url,
-            "uid":   uid,
-            "term":  term_value,
-        })
+                text = res.text.strip()
+                if text == "F" or not text:
+                    break
+                
+                soup = BeautifulSoup(text, "html.parser")
+                links = soup.select("a")
+                
+                page_new = 0
+                for link in links:
+                    href = link.get("href", "")
+                    if "uid=" not in href or "javascript:" in href:
+                        continue
+                    
 
-    print(f"  → {len(projects)}개 프로젝트 링크 발견")
+                    full_url = urljoin(BASE_URL, href)
+                    uid = full_url.split("uid=")[1].split("&")[0] if "uid=" in full_url else None
+                    if not uid or uid in seen_uids:
+                        continue
+                        
+                    seen_uids.add(uid)
+                    page_new += 1
+                    projects.append({
+                        "title": link.text.strip() or "제목 없음",
+                        "url": full_url,
+                        "uid": uid,
+                        "term": term_val,
+                        "category": cat,
+                    })
+                
+                # 새 uid가 없으면(빈 페이지 또는 전부 중복) 종료해 무한 루프를 막는다.
+                if page_new == 0:
+                    break
+                
+                page += 1
+                time.sleep(DELAY)
+
+    print(f"  → 총 {len(projects)}개 프로젝트 링크 발견")
     return projects
 
 
@@ -548,16 +589,40 @@ def save_csv(details_list: list[dict], path: str) -> None:
 
 # 6. API 전송
 
-def post_to_api(details_list: list[dict]) -> None:
+def mask_email(raw: str | None) -> str | None:
+    # 이메일 로컬 파트를 가린다. 콤마로 여러 주소가 올 수 있어 각각 처리하고,
+    # 짧은 로컬(1자 이하)은 원문 문자를 남기지 않는다.
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    masked = []
+    for part in (p.strip() for p in raw.split(",")):
+        if not part:
+            continue
+        if "@" not in part:
+            masked.append("***")
+            continue
+        local, domain = part.split("@", 1)
+        if len(local) > 3:
+            prefix = local[:3]
+        elif len(local) > 1:
+            prefix = local[:1]
+        else:
+            prefix = ""
+        masked.append(f"{prefix}**@{domain}")
+    return ", ".join(masked) if masked else None
+
+
+def post_to_api(details_list: list[dict]) -> int:
     import requests
 
     api_base = os.environ.get("BACKEND_API_BASE_URL")
     api_token = os.environ.get("CRAWLER_API_TOKEN")
     if not api_base or not api_token:
-        return
+        return 0
     if not api_base.startswith("https://"):
-        print(f"[API SKIP] BACKEND_API_BASE_URL은 https만 허용됩니다(토큰 평문 전송 방지): {api_base}")
-        return
+        # 설정 오류는 조용히 넘기지 않고 명확히 실패시킨다(토큰 평문 전송 방지).
+        raise ValueError(f"BACKEND_API_BASE_URL은 https여야 합니다: {api_base}")
 
     url = f"{api_base.rstrip('/')}/api/crawled-projects"
     headers = {
@@ -570,27 +635,28 @@ def post_to_api(details_list: list[dict]) -> None:
     for d in details_list:
         members = []
         for m in d.get("teamInfo", {}).get("members", []):
-            raw_email = m.get("email", "").strip()
-            masked_email = None
-            if raw_email and "@" in raw_email:
-                local, domain = raw_email.split("@", 1)
-                masked_email = f"{local}**@{domain}" if len(local) <= 3 else f"{local[:3]}**@{domain}"
-            
             members.append({
                 "role": m.get("role", ""),
                 "name": m.get("name", ""),
-                "maskedEmail": masked_email,
+                "maskedEmail": mask_email(m.get("email")),
                 "department": m.get("department", ""),
                 "grade": m.get("grade", "")
             })
 
-        # content에는 원본 이메일이 담긴 teamInfo를 넣지 않는다(참여자는 members로 마스킹해 전송).
-        content_source = {k: v for k, v in d.items() if k != "teamInfo"}
+        # content에는 teamInfo를 유지하되(등록자/멘토 정보 보존) 이메일만 마스킹해 원문 유출을 막는다.
+        masked_team = copy.deepcopy(d.get("teamInfo") or {})
+        reg = masked_team.get("registrant")
+        if isinstance(reg, dict) and reg.get("email"):
+            reg["email"] = mask_email(reg["email"])
+        for mm in masked_team.get("members", []):
+            if mm.get("email"):
+                mm["email"] = mask_email(mm["email"])
+        content_source = {**d, "teamInfo": masked_team}
 
         payload = {
             "uid": d.get("uid"),
             "term": d.get("term"),
-            "title": d.get("title", "제목 없음"),
+            "title": d.get("title") or "제목 없음",
             "summary": d.get("summary", ""),
             "description": d.get("description", ""),
             "content": build_post_content(content_source),
@@ -599,20 +665,35 @@ def post_to_api(details_list: list[dict]) -> None:
             "videoUrl": d.get("videoUrl"),
             "gitRepository": d.get("gitRepository"),
             "representativeImage": d.get("representativeImage"),
-            "category": category,
+            "category": d.get("category") or category,
             "members": members
         }
 
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=10)
-            resp.raise_for_status()
+        sent = False
+        for attempt in range(3):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=10, allow_redirects=False)
+                # 리다이렉트(로그인 페이지 등)를 성공으로 집계하지 않도록 2xx만 성공 처리.
+                if not (200 <= resp.status_code < 300):
+                    raise requests.HTTPError(f"unexpected status {resp.status_code}")
+                sent = True
+                break
+            except Exception as e:
+                if attempt == 2:
+                    print(f"  [API ERROR] UID {d.get('uid')} 전송 실패: {e}")
+                else:
+                    time.sleep(DELAY)
+        if sent:
             success += 1
             print(f"  [API OK] UID {d.get('uid')}")
-        except Exception as e:
-            print(f"  [API ERROR] UID {d.get('uid')} 전송 실패: {e}")
+        else:
             fail += 1
 
-    print(f"[OK] API 전송 완료 (성공 {success}건, 실패 {fail}건)")
+    if fail:
+        print(f"[경고] API 전송 {fail}건 실패 (성공 {success}건)")
+    else:
+        print(f"[OK] API 전송 완료 (성공 {success}건)")
+    return fail
 
 
 # 메인
@@ -622,18 +703,12 @@ def main():
     print("  소프트콘 작품 크롤러")
     print("=" * 50)
 
-    # 모드 선택
     # 환경변수에서 설정값을 읽어옴 (Cloud Run용)
-    # 로컬 실행 시 터미널에서 직접 지정: LIST_TYPE=current CATEGORY=S python3 crawler.py
-    mode      = os.environ.get("LIST_TYPE", "current")          # current / previous
-    category  = os.environ.get("CATEGORY", "S").upper()         # S / D / C / I
-    max_n     = int(os.environ.get("MAX_PROJECTS", MAX_PROJECTS))
-    term      = os.environ.get("TERM", "2024-1") if mode == "previous" else None
-
-    list_type = mode  # current / previous
+    max_n_env = os.environ.get("MAX_PROJECTS")
+    max_n = int(max_n_env) if max_n_env else MAX_PROJECTS
 
     # 1. 링크 수집
-    projects = get_project_links(list_type, category, term)
+    projects = get_all_project_links()
     if not projects:
         print("프로젝트 링크를 찾을 수 없습니다.")
         return
@@ -645,13 +720,14 @@ def main():
     print(f"[OK] 링크 저장 → {links_path}")
 
     # 2. 상세 정보 수집
-    targets      = projects[:min(len(projects), max_n)]
+    targets      = projects[:max_n] if max_n is not None else projects
     details_list = []
     img_count    = 0
 
     for i, proj in enumerate(targets, start=1):
         print(f"\n[{i}/{len(targets)}] {proj['title']}")
         details = get_project_details(proj["url"])
+        details["category"] = proj.get("category")
         details_list.append(details)
 
         # 이미지 다운로드
@@ -678,8 +754,9 @@ def main():
 
 
     # 5. DB 저장 또는 API 전송
+    failures = 0
     if os.environ.get("BACKEND_API_BASE_URL") and os.environ.get("CRAWLER_API_TOKEN"):
-        post_to_api(details_list)
+        failures = post_to_api(details_list)
     else:
         save_to_db(details_list)
 
@@ -690,6 +767,11 @@ def main():
     print(f"  이미지:   {img_count}개")
     print(f"  저장 위치: output/data/, output/images/")
     print("=" * 50)
+
+    # 정기 실행에서 실패를 감지할 수 있도록 전송 실패가 있으면 비정상 종료한다.
+    if failures:
+        print(f"[경고] 전송 실패 {failures}건. 비정상 종료(exit 1).")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
