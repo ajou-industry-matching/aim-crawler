@@ -545,6 +545,76 @@ def save_csv(details_list: list[dict], path: str) -> None:
     print(f"[OK] CSV 저장 → {path}")
 
 
+
+# 6. API 전송
+
+def post_to_api(details_list: list[dict]) -> None:
+    import requests
+
+    api_base = os.environ.get("BACKEND_API_BASE_URL")
+    api_token = os.environ.get("CRAWLER_API_TOKEN")
+    if not api_base or not api_token:
+        return
+    if not api_base.startswith("https://"):
+        print(f"[API SKIP] BACKEND_API_BASE_URL은 https만 허용됩니다(토큰 평문 전송 방지): {api_base}")
+        return
+
+    url = f"{api_base.rstrip('/')}/api/crawled-projects"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+    category = os.environ.get("CATEGORY", "S").upper()
+
+    success, fail = 0, 0
+    for d in details_list:
+        members = []
+        for m in d.get("teamInfo", {}).get("members", []):
+            raw_email = m.get("email", "").strip()
+            masked_email = None
+            if raw_email and "@" in raw_email:
+                local, domain = raw_email.split("@", 1)
+                masked_email = f"{local}**@{domain}" if len(local) <= 3 else f"{local[:3]}**@{domain}"
+            
+            members.append({
+                "role": m.get("role", ""),
+                "name": m.get("name", ""),
+                "maskedEmail": masked_email,
+                "department": m.get("department", ""),
+                "grade": m.get("grade", "")
+            })
+
+        # content에는 원본 이메일이 담긴 teamInfo를 넣지 않는다(참여자는 members로 마스킹해 전송).
+        content_source = {k: v for k, v in d.items() if k != "teamInfo"}
+
+        payload = {
+            "uid": d.get("uid"),
+            "term": d.get("term"),
+            "title": d.get("title", "제목 없음"),
+            "summary": d.get("summary", ""),
+            "description": d.get("description", ""),
+            "content": build_post_content(content_source),
+            "url": d.get("url"),
+            "presentationUrl": d.get("presentationUrl"),
+            "videoUrl": d.get("videoUrl"),
+            "gitRepository": d.get("gitRepository"),
+            "representativeImage": d.get("representativeImage"),
+            "category": category,
+            "members": members
+        }
+
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=10)
+            resp.raise_for_status()
+            success += 1
+            print(f"  [API OK] UID {d.get('uid')}")
+        except Exception as e:
+            print(f"  [API ERROR] UID {d.get('uid')} 전송 실패: {e}")
+            fail += 1
+
+    print(f"[OK] API 전송 완료 (성공 {success}건, 실패 {fail}건)")
+
+
 # 메인
 
 def main():
@@ -606,8 +676,12 @@ def main():
     csv_path = os.path.join(DATA_DIR, "result.csv")
     save_csv(details_list, csv_path)
 
-    # 5. DB 저장
-    save_to_db(details_list)
+
+    # 5. DB 저장 또는 API 전송
+    if os.environ.get("BACKEND_API_BASE_URL") and os.environ.get("CRAWLER_API_TOKEN"):
+        post_to_api(details_list)
+    else:
+        save_to_db(details_list)
 
     # 결과 요약
     print("\n" + "=" * 50)
