@@ -15,7 +15,7 @@ import time
 # 설정
 BASE_URL     = "https://softcon.ajou.ac.kr"
 DELAY        = 1.0   # 요청 간 대기 시간 (초)
-MAX_PROJECTS = 50    # 한 번에 크롤링할 최대 프로젝트 수
+MAX_PROJECTS = None  # 한 번에 크롤링할 최대 프로젝트 수 (None이면 무제한)
 # ─────────────────────────────────────────────
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -58,59 +58,90 @@ MAX_VARCHAR_LENGTH = 255
 
 # 1. 목록 페이지에서 프로젝트 링크 수집
 
-def get_project_links(list_type: str = "current", category: str = "S", term: str = None) -> list[dict]:
-    # 목록 페이지에서 프로젝트 링크를 추출
+def get_all_project_links() -> list[dict]:
+    # 모든 학기 및 카테고리의 프로젝트 링크를 추출 (AJAX 페이징 활용)
     import requests
     from bs4 import BeautifulSoup
 
-    if list_type == "current":
-        url = f"{BASE_URL}/works/works_list.asp?category={category}"
-    else:
-        if not term:
-            raise ValueError("이전 작품 목록을 가져오려면 학기(term)가 필요합니다.")
-        url = f"{BASE_URL}/works/works_list_prev.asp?category={category}&wTerm={term}"
-
-    print(f"[목록] {url}")
-
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[ERROR] 목록 페이지 요청 실패: {e}")
-        return []
-
-    soup = BeautifulSoup(response.text, "html.parser")
     projects = []
-    seen_urls = set()
+    seen_uids = set()
 
-    for link in soup.select("a"):
-        href = link.get("href", "")
-        if ("works.asp?uid=" not in href and "works_prev.asp?uid=" not in href) or "javascript:" in href:
-            continue
+    print("[목록] 학기(terms) 추출 중...")
+    try:
+        url_terms = f"{BASE_URL}/works/works_list_prev.asp?category=S&wTerm=2024-2"
+        res_terms = requests.get(url_terms, headers=HEADERS, timeout=10)
+        res_terms.raise_for_status()
+        terms = sorted(set(re.findall(r"wTerm=(\d{4}-\d)", res_terms.text)))
+    except Exception as e:
+        print(f"[ERROR] 학기 추출 실패: {e}")
+        terms = []
+    
+    if not terms:
+        terms = ["2020-1", "2020-2", "2021-1", "2021-2", "2022-1", "2022-2", "2023-1", "2023-2", "2024-1", "2024-2", "2025-1", "2025-2", "2026-1"]
+    
+    print(f"  → 학기 목록: {terms}")
 
-        # 절대 URL 변환
-        if href.startswith("./") or href.startswith("/"):
-            full_url = BASE_URL + href.replace("./", "/")
-        elif not href.startswith("http"):
-            full_url = BASE_URL + "/" + href
-        else:
-            full_url = href
+    categories = ["S", "W", "I", "A", "D", "C"]
+    
+    ajax_url = f"{BASE_URL}/common/ajax_file/work_list_ajax.asp"
+    ajax_headers = dict(HEADERS)
+    ajax_headers["X-Requested-With"] = "XMLHttpRequest"
 
-        if full_url in seen_urls:
-            continue
-        seen_urls.add(full_url)
+    for term_val in terms:
+        for cat in categories:
+            page = 1
+            while True:
+                data = {"page": page, "category": cat, "wTerm": term_val}
+                try:
+                    res = requests.post(ajax_url, headers=ajax_headers, data=data, timeout=10)
+                    res.raise_for_status()
+                except requests.RequestException as e:
+                    print(f"[ERROR] AJAX 요청 실패 ({term_val}, {cat}, page={page}): {e}")
+                    break
+                
+                text = res.text.strip()
+                if text == "F" or not text:
+                    break
+                
+                soup = BeautifulSoup(text, "html.parser")
+                links = soup.select("a")
+                
+                has_uid = False
+                for link in links:
+                    href = link.get("href", "")
+                    if "uid=" not in href or "javascript:" in href:
+                        continue
+                    
+                    has_uid = True
+                    
+                    # 절대 URL 변환
+                    if href.startswith("./") or href.startswith("/"):
+                        full_url = BASE_URL + href.replace("./", "/")
+                    elif not href.startswith("http"):
+                        full_url = BASE_URL + "/" + href
+                    else:
+                        full_url = href
+                        
+                    uid = full_url.split("uid=")[1].split("&")[0] if "uid=" in full_url else None
+                    if not uid or uid in seen_uids:
+                        continue
+                        
+                    seen_uids.add(uid)
+                    projects.append({
+                        "title": link.text.strip() or "제목 없음",
+                        "url": full_url,
+                        "uid": uid,
+                        "term": term_val,
+                        "category": cat,
+                    })
+                
+                if not has_uid:
+                    break
+                
+                page += 1
+                time.sleep(DELAY)
 
-        uid        = full_url.split("?uid=")[1].split("&")[0] if "?uid=" in full_url else None
-        term_value = full_url.split("wTerm=")[1].split("&")[0] if "wTerm=" in full_url else None
-
-        projects.append({
-            "title": link.text.strip() or "제목 없음",
-            "url":   full_url,
-            "uid":   uid,
-            "term":  term_value,
-        })
-
-    print(f"  → {len(projects)}개 프로젝트 링크 발견")
+    print(f"  → 총 {len(projects)}개 프로젝트 링크 발견")
     return projects
 
 
@@ -599,7 +630,7 @@ def post_to_api(details_list: list[dict]) -> None:
             "videoUrl": d.get("videoUrl"),
             "gitRepository": d.get("gitRepository"),
             "representativeImage": d.get("representativeImage"),
-            "category": category,
+            "category": d.get("category") or category,
             "members": members
         }
 
@@ -622,18 +653,12 @@ def main():
     print("  소프트콘 작품 크롤러")
     print("=" * 50)
 
-    # 모드 선택
     # 환경변수에서 설정값을 읽어옴 (Cloud Run용)
-    # 로컬 실행 시 터미널에서 직접 지정: LIST_TYPE=current CATEGORY=S python3 crawler.py
-    mode      = os.environ.get("LIST_TYPE", "current")          # current / previous
-    category  = os.environ.get("CATEGORY", "S").upper()         # S / D / C / I
-    max_n     = int(os.environ.get("MAX_PROJECTS", MAX_PROJECTS))
-    term      = os.environ.get("TERM", "2024-1") if mode == "previous" else None
-
-    list_type = mode  # current / previous
+    max_n_env = os.environ.get("MAX_PROJECTS")
+    max_n = int(max_n_env) if max_n_env else MAX_PROJECTS
 
     # 1. 링크 수집
-    projects = get_project_links(list_type, category, term)
+    projects = get_all_project_links()
     if not projects:
         print("프로젝트 링크를 찾을 수 없습니다.")
         return
@@ -645,7 +670,7 @@ def main():
     print(f"[OK] 링크 저장 → {links_path}")
 
     # 2. 상세 정보 수집
-    targets      = projects[:min(len(projects), max_n)]
+    targets      = projects[:max_n] if max_n is not None else projects
     details_list = []
     img_count    = 0
 
