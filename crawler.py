@@ -35,10 +35,17 @@ HEADERS = {
 }
 
 CATEGORY_MAP = {
-    "S": "소프트웨어",
-    "D": "디지털미디어",
-    "C": "사이버보안",
-    "I": "인공지능융합",
+    "S": "SW캡스톤디자인",
+    "I": "AI융합 캡스톤디자인",
+    "D": "사이버보안캡스톤디자인",
+    "M": "자기주도연구",
+    "P": "자기주도 프로젝트",
+    "R": "미디어 프로젝트",
+    "W": "SW기초교육",
+    "E": "기타활동",
+    "A": "AI집중교육",
+    "T": "SWeat 온라인 튜터링",
+    "C": "국방ICT프로젝트",
 }
 
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -89,7 +96,8 @@ def get_all_project_links() -> list[dict]:
 
     print(f"  → 학기 목록: {terms}")
 
-    categories = ["S", "W", "I", "A", "D", "C"]
+    # 사이트의 모든 카테고리를 순회한다(데이터 없는 조합은 skip). 일부만 하드코딩하면 M/P/R/E/T 등이 누락된다.
+    categories = list(CATEGORY_MAP.keys())
     
     ajax_url = f"{BASE_URL}/common/ajax_file/work_list_ajax.asp"
     ajax_headers = dict(HEADERS)
