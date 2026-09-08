@@ -555,6 +555,9 @@ def post_to_api(details_list: list[dict]) -> None:
     api_token = os.environ.get("CRAWLER_API_TOKEN")
     if not api_base or not api_token:
         return
+    if not api_base.startswith("https://"):
+        print(f"[API SKIP] BACKEND_API_BASE_URL은 https만 허용됩니다(토큰 평문 전송 방지): {api_base}")
+        return
 
     url = f"{api_base.rstrip('/')}/api/crawled-projects"
     headers = {
@@ -581,13 +584,16 @@ def post_to_api(details_list: list[dict]) -> None:
                 "grade": m.get("grade", "")
             })
 
+        # content에는 원본 이메일이 담긴 teamInfo를 넣지 않는다(참여자는 members로 마스킹해 전송).
+        content_source = {k: v for k, v in d.items() if k != "teamInfo"}
+
         payload = {
             "uid": d.get("uid"),
             "term": d.get("term"),
             "title": d.get("title", "제목 없음"),
             "summary": d.get("summary", ""),
             "description": d.get("description", ""),
-            "content": build_post_content(d),
+            "content": build_post_content(content_source),
             "url": d.get("url"),
             "presentationUrl": d.get("presentationUrl"),
             "videoUrl": d.get("videoUrl"),
