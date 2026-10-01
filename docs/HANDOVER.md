@@ -57,7 +57,7 @@ python crawler.py
 2. 없으면 **DB 직접 적재**(`save_to_db`, 레거시).
 
 ### API 전송 (권장)
-- `POST {BACKEND_API_BASE_URL}/api/crawled-projects`, 헤더 `Authorization: Bearer {CRAWLER_API_TOKEN}`.
+- `POST {BACKEND_API_BASE_URL}/api/crawled-projects`, 헤더 `X-Crawler-Key: {CRAWLER_API_TOKEN}`.
 - 백엔드 스키마(`CrawledProjectCreateRequest`)로 매핑한다: `uid, term, title, summary, description, content, url, presentationUrl, videoUrl, gitRepository, representativeImage, category, members[]`.
 - 개인정보 보호: 참여자 이메일은 `members[].maskedEmail`로만 보낸다. `content`에는 원본 이메일이 담긴 팀 정보를 넣지 않는다.
 - 보안: `BACKEND_API_BASE_URL`이 `https://`가 아니면 전송을 중단한다(토큰 평문 전송 방지).
@@ -71,7 +71,9 @@ python crawler.py
 ## 5. 백엔드 API 의존성
 
 - `POST /api/crawled-projects`는 `ADMIN`/`SUPER_ADMIN` 전용이다. 백엔드 인증은 Firebase ID 토큰 검증 방식이다.
-- 헤드리스 크롤러가 쓸 **관리자 토큰(`CRAWLER_API_TOKEN`) 발급 방식은 아직 미확정**이다. 결정 전까지 API 전송은 운영에 투입할 수 없다. (aim-backend#49)
+- 인증 방식은 **크롤러 전용 공유 시크릿 헤더**로 결정됐다(aim-backend#49). 백엔드가 `X-Crawler-Key` 값을 환경변수와 비교해 통과시킨다.
+- `Authorization: Bearer` 를 쓰지 않는 이유: 백엔드 `FirebaseAuthenticationFilter` 가 `Bearer ` 로 시작하는 헤더를 Firebase ID 토큰으로 검증하려 들어 정적 키는 통과할 수 없다.
+- **백엔드 구현이 아직 완료되지 않았다.** 연동 테스트는 백엔드에 검증 필터가 올라간 뒤에 가능하다.
 
 ## 6. 환경변수 (.env)
 
