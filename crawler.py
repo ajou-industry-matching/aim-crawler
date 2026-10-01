@@ -621,12 +621,15 @@ def post_to_api(details_list: list[dict]) -> int:
     if not api_base or not api_token:
         return 0
     if not api_base.startswith("https://"):
-        # 설정 오류는 조용히 넘기지 않고 명확히 실패시킨다(토큰 평문 전송 방지).
+        # 설정 오류는 조용히 넘기지 않고 명확히 실패시킨다(키 평문 전송 방지).
         raise ValueError(f"BACKEND_API_BASE_URL은 https여야 합니다: {api_base}")
 
     url = f"{api_base.rstrip('/')}/api/crawled-projects"
+    # 백엔드와 합의한 크롤러 전용 헤더다. Authorization 을 쓰면 백엔드의
+    # FirebaseAuthenticationFilter 가 Bearer 토큰을 Firebase ID 토큰으로 검증하려 들어
+    # 반드시 실패한다. 전용 헤더라 그 필터가 반응하지 않는다.
     headers = {
-        "Authorization": f"Bearer {api_token}",
+        "X-Crawler-Key": api_token,
         "Content-Type": "application/json",
     }
     category = os.environ.get("CATEGORY", "S").upper()
