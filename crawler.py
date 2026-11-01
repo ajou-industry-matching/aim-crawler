@@ -624,7 +624,7 @@ def post_to_api(details_list: list[dict]) -> int:
         # 설정 오류는 조용히 넘기지 않고 명확히 실패시킨다(키 평문 전송 방지).
         raise ValueError(f"BACKEND_API_BASE_URL은 https여야 합니다: {api_base}")
 
-    url = f"{api_base.rstrip('/')}/api/crawled-projects"
+    url = f"{api_base.rstrip('/')}/api/crawled-projects/crawler"
     # 백엔드와 합의한 크롤러 전용 헤더다. Authorization 을 쓰면 백엔드의
     # FirebaseAuthenticationFilter 가 Bearer 토큰을 Firebase ID 토큰으로 검증하려 들어
     # 반드시 실패한다. 전용 헤더라 그 필터가 반응하지 않는다.
@@ -730,6 +730,10 @@ def main():
     for i, proj in enumerate(targets, start=1):
         print(f"\n[{i}/{len(targets)}] {proj['title']}")
         details = get_project_details(proj["url"])
+        # 상세 요청이 실패하면 uid 없는 "제목 없음" 건이 적재되므로 건너뛴다.
+        if details.get("error"):
+            print("  [SKIP] 상세 수집 실패")
+            continue
         details["category"] = proj.get("category")
         details_list.append(details)
 

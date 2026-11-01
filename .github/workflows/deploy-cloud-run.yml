@@ -22,10 +22,7 @@ env:
   ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY || 'crawler-repo' }}
   IMAGE_NAME: ${{ vars.IMAGE_NAME || 'softcon-crawler' }}
   CLOUD_RUN_JOB_NAME: ${{ vars.CLOUD_RUN_JOB_NAME || 'softcon-crawler' }}
-  LIST_TYPE: ${{ vars.LIST_TYPE || 'current' }}
   CATEGORY: ${{ vars.CATEGORY || 'S' }}
-  MAX_PROJECTS: ${{ vars.MAX_PROJECTS || '50' }}
-  TERM: ${{ vars.TERM || '2024-1' }}
   DB_HOST: ${{ vars.DB_HOST || '161.33.46.41' }}
   DB_PORT: ${{ vars.DB_PORT || '3306' }}
   DB_USER: ${{ vars.DB_USER || 'aim_be' }}
@@ -61,7 +58,7 @@ jobs:
           fi
 
           missing=0
-          for name in GCP_PROJECT_ID GCP_REGION ARTIFACT_REGISTRY_REPOSITORY IMAGE_NAME CLOUD_RUN_JOB_NAME LIST_TYPE CATEGORY MAX_PROJECTS DB_HOST DB_PORT DB_USER DB_NAME DB_POST_TABLE DB_USER_TABLE; do
+          for name in GCP_PROJECT_ID GCP_REGION ARTIFACT_REGISTRY_REPOSITORY IMAGE_NAME CLOUD_RUN_JOB_NAME CATEGORY DB_HOST DB_PORT DB_USER DB_NAME DB_POST_TABLE DB_USER_TABLE; do
             if [ -z "${!name}" ]; then
               echo "$name is required." >&2
               missing=1
@@ -124,7 +121,7 @@ jobs:
       - name: Update Cloud Run Job
         run: |
           set -euo pipefail
-          env_vars="LIST_TYPE=${LIST_TYPE},CATEGORY=${CATEGORY},MAX_PROJECTS=${MAX_PROJECTS},TERM=${TERM},DB_HOST=${DB_HOST},DB_PORT=${DB_PORT},DB_USER=${DB_USER},DB_NAME=${DB_NAME},DB_AUTO_CREATE_CRAWLER_USER=${DB_AUTO_CREATE_CRAWLER_USER},CRAWLER_USER_EMAIL=${CRAWLER_USER_EMAIL},CRAWLER_USER_FIREBASE_UID=${CRAWLER_USER_FIREBASE_UID},CRAWLER_USER_NAME=${CRAWLER_USER_NAME},DB_POST_TABLE=${DB_POST_TABLE},DB_USER_TABLE=${DB_USER_TABLE}"
+          env_vars="CATEGORY=${CATEGORY},DB_HOST=${DB_HOST},DB_PORT=${DB_PORT},DB_USER=${DB_USER},DB_NAME=${DB_NAME},DB_AUTO_CREATE_CRAWLER_USER=${DB_AUTO_CREATE_CRAWLER_USER},CRAWLER_USER_EMAIL=${CRAWLER_USER_EMAIL},CRAWLER_USER_FIREBASE_UID=${CRAWLER_USER_FIREBASE_UID},CRAWLER_USER_NAME=${CRAWLER_USER_NAME},DB_POST_TABLE=${DB_POST_TABLE},DB_USER_TABLE=${DB_USER_TABLE}"
           if [ -n "$CRAWLER_USER_ID" ]; then
             env_vars="${env_vars},CRAWLER_USER_ID=${CRAWLER_USER_ID}"
           fi
@@ -134,6 +131,7 @@ jobs:
             --region "$GCP_REGION" \
             --image "${{ steps.image.outputs.image_uri }}" \
             --update-env-vars "$env_vars" \
+            --remove-env-vars "LIST_TYPE,MAX_PROJECTS,TERM" \
             --update-secrets "DB_PASSWORD=DB_PASSWORD:latest"
 
       - name: Execute Cloud Run Job
