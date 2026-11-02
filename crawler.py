@@ -250,12 +250,12 @@ def get_project_details(project_url: str) -> dict:
             details["videoUrl"] = video_iframe.get("src", "").strip()
 
         # 대표 이미지 URL
-        rep_image = soup.select_one(".dw_title div img")
+        rep_image = soup.select_one(".countsort img")
         if rep_image and rep_image.has_attr("src"):
             img_src = rep_image["src"]
-            if img_src.startswith("./") or img_src.startswith("/"):
-                img_src = BASE_URL + img_src.replace("./", "/")
-            details["representativeImage"] = img_src
+            if "no_registrant" not in img_src and "movie_noimg" not in img_src:
+                # 기존처럼 사이트 루트 기준으로 풀되, ./ 나 / 로 시작하지 않는 상대경로도 절대 URL로 만든다.
+                details["representativeImage"] = urljoin(BASE_URL + "/", img_src)
 
         return details
 
