@@ -150,6 +150,8 @@ def get_all_project_links() -> list[dict]:
                 
                 page += 1
                 time.sleep(DELAY)
+            # F/빈 응답/새 uid 0건으로 끝난 조합 뒤에도 쉬어 연속 요청을 막는다.
+            time.sleep(DELAY)
 
     print(f"  → 총 {len(projects)}개 프로젝트 링크 발견")
     return projects
