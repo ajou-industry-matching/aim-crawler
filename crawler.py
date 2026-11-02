@@ -99,66 +99,54 @@ def get_all_project_links() -> list[dict]:
     # 사이트의 모든 카테고리를 순회한다(데이터 없는 조합은 skip). 일부만 하드코딩하면 M/P/R/E/T 등이 누락된다.
     categories = list(CATEGORY_MAP.keys())
     
-    ajax_url = f"{BASE_URL}/common/ajax_file/work_list_ajax.asp"
-    ajax_headers = dict(HEADERS)
-    ajax_headers["X-Requested-With"] = "XMLHttpRequest"
-
+    # 목록은 공개 GET 페이지(works_list_prev.asp)에서 받는다.
+    # AJAX 엔드포인트(work_list_ajax.asp)는 사이트 방화벽(WebKnight)이 차단해 0건으로 끝난다.
+    # 이 페이지는 학기+카테고리별 전체 목록을 한 번에 주므로 페이징이 필요 없다.
     for term_val in terms:
         for cat in categories:
-            page = 1
-            while True:
-                data = {"page": page, "category": cat, "wTerm": term_val}
-                res = None
-                for attempt in range(3):
-                    try:
-                        res = requests.post(ajax_url, headers=ajax_headers, data=data, timeout=10)
-                        res.raise_for_status()
-                        break
-                    except requests.RequestException as e:
-                        if attempt == 2:
-                            # 재시도 후에도 실패하면 조용히 성공 처리하지 않고 경고로 드러낸다(부분 수집).
-                            print(f"[경고] AJAX 3회 실패, 부분 수집 ({term_val}, {cat}, page={page}): {e}")
-                        else:
-                            time.sleep(DELAY)
-                if res is None:
+            list_url = f"{BASE_URL}/works/works_list_prev.asp?category={cat}&wTerm={term_val}"
+            res = None
+            for attempt in range(3):
+                try:
+                    res = requests.get(list_url, headers=HEADERS, timeout=10)
+                    res.raise_for_status()
                     break
-
-                text = res.text.strip()
-                if text == "F" or not text:
-                    break
-                
-                soup = BeautifulSoup(text, "html.parser")
-                links = soup.select("a")
-                
-                page_new = 0
-                for link in links:
-                    href = link.get("href", "")
-                    if "uid=" not in href or "javascript:" in href:
-                        continue
-                    
-
-                    full_url = urljoin(BASE_URL, href)
-                    uid = full_url.split("uid=")[1].split("&")[0] if "uid=" in full_url else None
-                    if not uid or uid in seen_uids:
-                        continue
-                        
-                    seen_uids.add(uid)
-                    page_new += 1
-                    projects.append({
-                        "title": link.text.strip() or "제목 없음",
-                        "url": full_url,
-                        "uid": uid,
-                        "term": term_val,
-                        "category": cat,
-                    })
-                
-                # 새 uid가 없으면(빈 페이지 또는 전부 중복) 종료해 무한 루프를 막는다.
-                if page_new == 0:
-                    break
-                
-                page += 1
+                except requests.RequestException as e:
+                    if attempt == 2:
+                        # 재시도 후에도 실패하면 조용히 성공 처리하지 않고 경고로 드러낸다(부분 수집).
+                        print(f"[경고] 목록 요청 3회 실패, 부분 수집 ({term_val}, {cat}): {e}")
+                    else:
+                        time.sleep(DELAY)
+            if res is None:
                 time.sleep(DELAY)
-            # F/빈 응답/새 uid 0건으로 끝난 조합 뒤에도 쉬어 연속 요청을 막는다.
+                continue
+
+            if "WebKnight" in res.text:
+                # 방화벽에 막히면 조용히 0건으로 끝내지 않고 드러낸다.
+                print(f"[경고] 목록이 방화벽에 차단됨 ({term_val}, {cat})")
+                time.sleep(DELAY)
+                continue
+
+            soup = BeautifulSoup(res.text, "html.parser")
+            for link in soup.select("a"):
+                href = link.get("href", "")
+                if "uid=" not in href or "javascript:" in href:
+                    continue
+
+                full_url = urljoin(BASE_URL, href)
+                uid = full_url.split("uid=")[1].split("&")[0] if "uid=" in full_url else None
+                if not uid or uid in seen_uids:
+                    continue
+
+                seen_uids.add(uid)
+                projects.append({
+                    "title": link.text.strip() or "제목 없음",
+                    "url": full_url,
+                    "uid": uid,
+                    "term": term_val,
+                    "category": cat,
+                })
+            # 다음 조합 요청 전 대기 (#17)
             time.sleep(DELAY)
 
     print(f"  → 총 {len(projects)}개 프로젝트 링크 발견")
