@@ -22,10 +22,7 @@ env:
   ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY || 'crawler-repo' }}
   IMAGE_NAME: ${{ vars.IMAGE_NAME || 'softcon-crawler' }}
   CLOUD_RUN_JOB_NAME: ${{ vars.CLOUD_RUN_JOB_NAME || 'softcon-crawler' }}
-  LIST_TYPE: ${{ vars.LIST_TYPE || 'current' }}
   CATEGORY: ${{ vars.CATEGORY || 'S' }}
-  MAX_PROJECTS: ${{ vars.MAX_PROJECTS || '50' }}
-  TERM: ${{ vars.TERM || '2024-1' }}
   DB_HOST: ${{ vars.DB_HOST || '161.33.46.41' }}
   DB_PORT: ${{ vars.DB_PORT || '3306' }}
   DB_USER: ${{ vars.DB_USER || 'aim_be' }}
@@ -37,6 +34,7 @@ env:
   CRAWLER_USER_NAME: ${{ vars.CRAWLER_USER_NAME || 'Softcon Crawler' }}
   DB_POST_TABLE: ${{ vars.DB_POST_TABLE || 'posts' }}
   DB_USER_TABLE: ${{ vars.DB_USER_TABLE || 'users' }}
+  BACKEND_API_BASE_URL: ${{ vars.BACKEND_API_BASE_URL || 'https://aim-be-prod-talhhkr7pq-du.a.run.app' }}
 
 jobs:
   deploy:
@@ -61,7 +59,7 @@ jobs:
           fi
 
           missing=0
-          for name in GCP_PROJECT_ID GCP_REGION ARTIFACT_REGISTRY_REPOSITORY IMAGE_NAME CLOUD_RUN_JOB_NAME LIST_TYPE CATEGORY MAX_PROJECTS DB_HOST DB_PORT DB_USER DB_NAME DB_POST_TABLE DB_USER_TABLE; do
+          for name in GCP_PROJECT_ID GCP_REGION ARTIFACT_REGISTRY_REPOSITORY IMAGE_NAME CLOUD_RUN_JOB_NAME CATEGORY DB_HOST DB_PORT DB_USER DB_NAME DB_POST_TABLE DB_USER_TABLE; do
             if [ -z "${!name}" ]; then
               echo "$name is required." >&2
               missing=1
@@ -109,6 +107,24 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure crawler API token secret exists
+        env:
+          CRAWLER_API_TOKEN_VALUE: ${{ secrets.CRAWLER_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CRAWLER_API_TOKEN_VALUE" ]; then
+            if gcloud secrets describe CRAWLER_API_TOKEN --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
+              printf %s "$CRAWLER_API_TOKEN_VALUE" | gcloud secrets versions add CRAWLER_API_TOKEN --project "$GCP_PROJECT_ID" --data-file=-
+            else
+              printf %s "$CRAWLER_API_TOKEN_VALUE" | gcloud secrets create CRAWLER_API_TOKEN --project "$GCP_PROJECT_ID" --data-file=- --replication-policy=automatic
+            fi
+          fi
+
+          if ! gcloud secrets describe CRAWLER_API_TOKEN --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
+            echo "GCP Secret Manager secret CRAWLER_API_TOKEN does not exist. Add GitHub Secret CRAWLER_API_TOKEN once, or create the GCP secret manually." >&2
+            exit 1
+          fi
+
       - name: Configure Docker auth
         run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
 
@@ -124,7 +140,7 @@ jobs:
       - name: Update Cloud Run Job
         run: |
           set -euo pipefail
-          env_vars="LIST_TYPE=${LIST_TYPE},CATEGORY=${CATEGORY},MAX_PROJECTS=${MAX_PROJECTS},TERM=${TERM},DB_HOST=${DB_HOST},DB_PORT=${DB_PORT},DB_USER=${DB_USER},DB_NAME=${DB_NAME},DB_AUTO_CREATE_CRAWLER_USER=${DB_AUTO_CREATE_CRAWLER_USER},CRAWLER_USER_EMAIL=${CRAWLER_USER_EMAIL},CRAWLER_USER_FIREBASE_UID=${CRAWLER_USER_FIREBASE_UID},CRAWLER_USER_NAME=${CRAWLER_USER_NAME},DB_POST_TABLE=${DB_POST_TABLE},DB_USER_TABLE=${DB_USER_TABLE}"
+          env_vars="CATEGORY=${CATEGORY},DB_HOST=${DB_HOST},DB_PORT=${DB_PORT},DB_USER=${DB_USER},DB_NAME=${DB_NAME},DB_AUTO_CREATE_CRAWLER_USER=${DB_AUTO_CREATE_CRAWLER_USER},CRAWLER_USER_EMAIL=${CRAWLER_USER_EMAIL},CRAWLER_USER_FIREBASE_UID=${CRAWLER_USER_FIREBASE_UID},CRAWLER_USER_NAME=${CRAWLER_USER_NAME},DB_POST_TABLE=${DB_POST_TABLE},DB_USER_TABLE=${DB_USER_TABLE},BACKEND_API_BASE_URL=${BACKEND_API_BASE_URL}"
           if [ -n "$CRAWLER_USER_ID" ]; then
             env_vars="${env_vars},CRAWLER_USER_ID=${CRAWLER_USER_ID}"
           fi
@@ -134,7 +150,8 @@ jobs:
             --region "$GCP_REGION" \
             --image "${{ steps.image.outputs.image_uri }}" \
             --update-env-vars "$env_vars" \
-            --update-secrets "DB_PASSWORD=DB_PASSWORD:latest"
+            --remove-env-vars "LIST_TYPE,MAX_PROJECTS,TERM" \
+            --update-secrets "DB_PASSWORD=DB_PASSWORD:latest,CRAWLER_API_TOKEN=CRAWLER_API_TOKEN:latest"
 
       - name: Execute Cloud Run Job
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.execute_job == 'true' }}

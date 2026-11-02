@@ -78,7 +78,7 @@ gcloud secrets add-iam-policy-binding DB_PASSWORD \
 gcloud run jobs update softcon-crawler \
   --project ajou-project-cafd9 \
   --region asia-northeast3 \
-  --update-env-vars "LIST_TYPE=current,CATEGORY=S,MAX_PROJECTS=50,TERM=2024-1,DB_HOST=161.33.46.41,DB_PORT=3306,DB_USER=aim_be,DB_NAME=aim,DB_AUTO_CREATE_CRAWLER_USER=true,CRAWLER_USER_EMAIL=softcon-crawler@aim.local,CRAWLER_USER_FIREBASE_UID=softcon-crawler,CRAWLER_USER_NAME=Softcon Crawler,DB_POST_TABLE=posts,DB_USER_TABLE=users" \
+  --update-env-vars "CATEGORY=S,DB_HOST=161.33.46.41,DB_PORT=3306,DB_USER=aim_be,DB_NAME=aim,DB_AUTO_CREATE_CRAWLER_USER=true,CRAWLER_USER_EMAIL=softcon-crawler@aim.local,CRAWLER_USER_FIREBASE_UID=softcon-crawler,CRAWLER_USER_NAME=Softcon Crawler,DB_POST_TABLE=posts,DB_USER_TABLE=users" \
   --update-secrets "DB_PASSWORD=DB_PASSWORD:latest"
 ```
 
