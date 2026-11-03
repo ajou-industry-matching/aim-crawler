@@ -1,0 +1,233 @@
+<!doctype html><html><head><title>t</title></head><body>
+<div class="ko board view co-board ">
+	
+		
+
+
+
+
+
+
+
+
+<div class="paran">
+
+	<div class="bn-view-common01 type01">
+	
+		
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.1/font/bootstrap-icons.css">
+<input type="hidden" name="articleNo" value="376563" />
+<div class="b-main-box">
+	<div class="b-top-box">
+		<p class="b-title-box">
+			
+			
+			
+			
+			
+
+			
+			
+			<span class="b-title">수원시 교통약자지원센터 차량 배차 개선을 통한 고객 대기시간 감소 방안</span>
+		</p>
+	</div>
+
+	
+	
+
+	<input type="hidden" id="etcChar12" name="etcChar12" value="{&#034;personalName&#034;:&#034;&#034;,&#034;personalProName&#034;:&#034;&#034;}"/>
+	<input type="hidden" id="etcChar10" name="etcChar10" value="{&#034;personalDepart&#034;:&#034;&#034;,&#034;personalProDepart&#034;:&#034;&#034;}"/>
+	<input type="hidden" id="etcChar1" name="etcChar1" value=""/>
+	<input type="hidden" id="personalEmail" value=""/>
+	<input type="hidden" id="etcChar15" name="etcChar15" value="{&#034;teamNames0&#034;:&#034;이소흔&#034;,&#034;teamNamesArr&#034;:[&#034;김가현&#034;,&#034;정범준&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;],&#034;teamNames10&#034;:&#034;정슬기&#034;}"/>
+	<input type="hidden" id="etcChar6" name="etcChar6" value="{&#034;teamDepartment0&#034;:&#034;산업공학과&#034;,&#034;teamDepartmentArr&#034;:[&#034;산업공학과&#034;,&#034;산업공학과&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;],&#034;teamDepartment10&#034;:&#034;산업공학과&#034;}"/>
+	<input type="hidden" id="etcChar14" name="etcChar14" value="{&#034;teamGrade0&#034;:&#034;2&#034;,&#034;teamGradeArr&#034;:[&#034;2&#034;,&#034;2&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;]}"/>
+	<input type="hidden" id="etcText2" name="etcText2" value="{&#034;teamEmailId&#034;:&#034;soheun1004&#034;,&#034;teamEmailDomain&#034;:&#034;ajou.ac.kr&#034;,&#034;teamMemberEmail&#034;:[&#034;kahyxn&#034;,&#034;hahshshw&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;ajou.ac.kr&#034;,&#034;ajou.ac.kr&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;,&#034;&#034;]}"/>
+	<input type="hidden" id="etcChar13" name="etcChar13" value="{&#034;insta&#034;:&#034;swi_likemap&#034;,&#034;youtube&#034;:&#034;&#034;,&#034;blog&#034;:&#034;&#034;,&#034;facebook&#034;:&#034;&#034;}"/>
+	<input type="hidden" id="etcChar2" name="etcChar2" value="team"/>
+	
+	<div class="b-content-box">
+		<div class="b-con-box" >
+		
+		<script>
+			$(function(){
+				let gubun = $("#etcChar2").val();
+				// 개인
+				if (gubun === 'personal') {
+					let nameStr = $("#etcChar12").val();
+					let nameObj = JSON.parse(nameStr);
+					let departStr = $("#etcChar10").val();
+					let departObj = JSON.parse(departStr);
+					let grade = $("#etcChar1").val();
+					let personalEmail = $("#personalEmail").val();
+					
+					if (nameObj.personalName == ' ') {
+						$("#personalH").addClass('hide');
+						$("#personal").addClass('hide');
+						$("#personalPro").addClass('hide');
+						$("#personalProH").addClass('hide');
+					} else {
+						$("#personal").append(nameObj.personalName);
+						$("#personal").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + departObj.personalDepart);
+						$("#personal").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + grade);
+						$("#personal").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + personalEmail);
+
+						$("#personalPro").append(nameObj.personalProName);
+						$("#personalPro").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + departObj.personalProDepart);
+					}
+					
+				}
+				
+				// 팀
+				if (gubun === 'team') {
+					let nameStr = $("#etcChar15").val();
+					let nameObj = JSON.parse(nameStr);
+					let departStr = $("#etcChar6").val();
+					let departObj = JSON.parse(departStr);
+					let gradeStr = $("#etcChar14").val();
+					let gradeObj = JSON.parse(gradeStr);
+					let emailStr = $("#etcText2").val();
+					let emailObj = JSON.parse(emailStr);
+
+					$("#master").append(nameObj.teamNames0);
+					$("#master").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + departObj.teamDepartment0);
+					$("#master").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + gradeObj.teamGrade0);
+					let emailMasking = emailObj.teamEmailId;
+						emailMasking = emailMasking.slice(0, -2);
+					$("#master").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + emailMasking + '**' + ' @ '+ emailObj.teamEmailDomain);
+
+					for (let i = 0; i < nameObj.teamNamesArr.length; i++) {
+						if ("" != emailObj.teamMemberEmail[i]) {
+						$("#member").append(nameObj.teamNamesArr[i]);
+						$("#member").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + departObj.teamDepartmentArr[i]);
+						$("#member").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + gradeObj.teamGradeArr[i]);
+							let emailMasking = emailObj.teamMemberEmail[i];
+							emailMasking = emailMasking.slice(0, -2);
+						$("#member").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + emailMasking + '**' + ' @ ' + emailObj.teamMemberEmail[i + 9] + '<br>');
+						}
+					}
+
+					$("#professor").append(nameObj.teamNames10);
+					$("#professor").append('&nbsp;&nbsp; | &nbsp;&nbsp;' + departObj.teamDepartment10);
+				}
+				
+			let snsStr = $("#etcChar13").val();
+			let snsObj = JSON.parse(snsStr);
+
+			if ("" != snsObj.insta) {
+				$("#snsTitle").removeClass('hide');
+				$("#insta").removeClass('hide');
+				$("#snsP").removeClass('hide');
+				$("#instaUrl").attr('href', 'https://www.instagram.com/' + snsObj.insta);
+				$("#instaUrl").attr('target', '_blank');
+				$("#instaUrl").append('https://www.instagram.com/' + snsObj.insta + '<br>');
+			}
+			if ("" != snsObj.youtube) {
+				$("#snsTitle").removeClass('hide');
+				$("#youtube").removeClass('hide');
+				$("#snsP").removeClass('hide');
+				$("#youtubeUrl").attr('href', 'https://www.youtube.com/' + snsObj.youtube);
+				$("#youtubeUrl").attr('target', '_blank');
+				$("#youtubeUrl").append('https://www.youtube.com/' + snsObj.youtube + '<br>');
+			}
+			if ("" != snsObj.blog) {
+				$("#snsTitle").removeClass('hide');
+				$("#blog").removeClass('hide');
+				$("#snsP").removeClass('hide');
+				$("#blogUrl").attr('href', snsObj.blog);
+				$("#blogUrl").attr('target', '_blank');
+				$("#blogUrl").append(snsObj.blog + '<br>');
+			}
+			if ("" != snsObj.facebook) {
+				$("#snsTitle").removeClass('hide');
+				$("#facebook").removeClass('hide');
+				$("#snsP").removeClass('hide');
+				$("#facebookUrl").attr('href', 'https://www.facebook.com/' + snsObj.facebook);
+				$("#facebookUrl").attr('target', '_blank');
+				$("#facebookUrl").append('https://www.facebook.com/' + snsObj.facebook + '<br>');
+			}
+			});
+			
+			//
+				$( document ).ready(function() {
+					console.log(window.location.pathname)
+					var test2 = window.location.pathname
+					$("#test2").val(test2)
+					if (test2 == '/ace/paran/meeting.do') {
+						$(".test2").hide()
+					}
+				});
+			
+		</script>
+		
+		
+			<h4 class="h4-tit01">
+				작품개요
+			</h4>
+			<div class="fr-view"><p>안녕하세요!👋</p><p>2026학년도 2학기 아주대학교 파란학기-Extreme 팀&nbsp;</p><p>&#39;수원이가 좋아할 지도&#39; 입니다!</p><p><br></p><p>이번 중간 발표회에서 저희는</p><p>프로젝트 소개 및 현재 상황, 향후 계획에 대해서 설명드리려고 합니다!</p><p><br></p><p>우선 저희 프로젝트의 주제는</p><p>&#39;수원시 교통약자지원센터 차량 배차 개선을 통한 고객 대기시간 감소 방안&#39;을</p><p>마련하는 것입니다!</p><p><br></p><p>저희는 약 한 달동안 크게 세 가지 활동을 진행하였습니다</p><p>🗣️우선 교통약자지원센터 담당자와의 회의를 통하여</p><p>영향을 주는 분석변수를 정의했습니다.&nbsp;</p><p><br></p><p>📊이후 학교, 행정기관 등 주요 시설의 위치 데이터를 수집한 후</p><p>지도에 시각화 하였습니다.</p><p><br></p><p>또한 센터로부터 데이터를 받고</p><p>이를 활용할 수 있도록 정제하였습니다.</p><p><br></p><p>앞으로 저희는 지금까지의 활동을 바탕으로</p><p>📍수원시를 격자 단위로 나누고,&nbsp;</p><p>📈시간대별 호출 데이터를 분석하여,</p><p>호출 집중 시간대 및 지역을 확보할 예정입니다.&nbsp;</p><p><br></p><p>이후로는 이를 통해 최적화 모델을 정의하고,&nbsp;</p><p>🖥️운영과정에서 활용할 수 있는 대시보드와 📱운전원용 화면도 구축한 후,&nbsp;</p><p>시뮬레이션을 통해 실제 감소 효과를 검증할 예정입니다.&nbsp;</p><p><br></p><p>앞으로도</p><p>수원이가 좋아할 지도 팀의 진행과정에&nbsp;</p><p>많은 관심 부탁드립니다!🔥</p></div>
+		
+			
+		
+	
+		<div class="view-webzine">
+			<input type="hidden" id="test2" value="">
+			<div class="test2">
+				
+					
+					
+						
+							
+					
+					
+			</div>
+			
+			
+			
+				
+
+				
+				
+					
+					
+				
+				<h4 class="h4-tit01">
+					중간교류회
+				</h4>
+				<span class="fr-video fr-fvc fr-dvi fr-draggable" >
+					<iframe width="1232" height="693" src="https://www.youtube.com/embed/licHM9Zd0xU" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen="" class="fr-draggable">
+					</iframe>
+				</span>
+			
+		</div>
+			
+		
+		
+		
+			<h5 class="h5-tit01">팀명</h5>
+			<p class="con-p">
+				수원이가 좋아할 지도
+			</p>
+			<h5 class="h5-tit01">팀장</h5>
+			<p id="master" class="con-p"></p>
+			<h5 class="h5-tit01">팀원</h5>
+			<p id="member" class="con-p"></p>
+			<h5 class="h5-tit01">지도교수</h5>
+			<p id="professor" class="con-p"></p>
+		
+	
+		
+			<h5 class="h5-tit01 hide" id="snsTitle">SNS바로가기</h5>
+			<p id="insta" class=" hide">
+				<img src="/_res/ajou/kr/img/main/icon_in-on.png" alt="인스타그램" width="30" style="display : inline; padding-right : 5px" /><a href="#" id="instaUrl"></a>
+			</p>
+			<p id="youtube" class="hide">
+				<img src="/_res/ajou/kr/img/main/icon_yt-on.png" alt="유튜브" width="30" style="display : inline; padding-right : 5px" /><a href="#" id="youtubeUrl"></a>
+			</p>
+			<p id="blog" class="hide">
+				<img src="/_res/ajou/kr/img/main/icon_bg-on.png" alt="블로그" width="30" style="display : inline; padding-right : 5px" /><a href="#" id="blogUrl"></a>
+			</p>
+			<p id="facebook" class="hide">
+				<img src="/_res/ajou/kr/img/main/icon_fb-on.png" alt="페이스북" width="30" style="display : inline; padding-right : 5px" /><a href="#" id="facebookUrl"></a>
+			</p>
+</body></html>

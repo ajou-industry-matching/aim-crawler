@@ -25,11 +25,11 @@ MAX_PROJECTS = None  # 한 번에 크롤링할 최대 프로젝트 수 (None이�
 # 둘 다 동일한 백엔드 API 싱크(post_to_api)로 보낸다.
 CRAWL_SOURCE = os.environ.get("CRAWL_SOURCE", "softcon").strip().lower()
 
-# 파란학기제: 학기별 페이지에 프로젝트가 표로 인라인(상세 페이지 없음, JS 아님).
-PARAN_BASE     = "https://www.ajou.ac.kr"
-PARAN_LIST_URL = PARAN_BASE + "/ace/paran/{term}.do"
-PARAN_SEED     = "2025-1"       # 학기 목록 자동 추출용 시드(모든 학기 링크가 nav에 있음)
-PARAN_CATEGORY = "파란학기제"   # 소프트콘 단일문자 코드와 구분되는 소스 라벨
+# 파란학기제: 성과공유 게시판(conference.do). 목록 offset 페이징 → 상세(articleNo).
+PARAN_BASE      = "https://www.ajou.ac.kr"
+PARAN_CONF_URL  = PARAN_BASE + "/ace/paran/conference.do"
+PARAN_PAGE_SIZE = 12            # 목록 한 페이지 글 수(articleLimit)
+PARAN_CATEGORY  = "파란학기제"   # 소프트콘 단일문자 코드와 구분되는 소스 라벨
 # ─────────────────────────────────────────────
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -282,123 +282,251 @@ def get_project_details(project_url: str) -> dict:
         return {"url": project_url, "error": str(e)}
 
 
-# 2-b. 파란학기제(대학혁신단) 수집
-#   - 학기 페이지(/ace/paran/{term}.do)에 프로젝트가 표로 전부 인라인된다.
-#   - 상세 페이지/이미지/깃·영상 링크가 없으므로 목록 파싱이 곧 상세 수집이다.
-#   - 소프트콘과 동일한 details 스키마(uid/term/title/category/content...)로 맞춰
-#     기존 post_to_api / save_to_db / save_csv 를 그대로 재사용한다.
+# 2-b. 파란학기제(대학혁신단) — 성과공유 게시판(conference.do) 수집
+#   - 목록(conference.do, article.offset 페이징, 한 페이지 12건) → 상세(mode=view&articleNo=N).
+#   - 멤버(팀장/팀원/지도교수)는 상세 페이지의 "숨은 input(JSON)"에 있고 JS가 렌더한다.
+#     정적 GET엔 화면에 안 보이므로 input value(JSON)를 직접 파싱한다.
+#   - term(2024-1 등)은 상세엔 구조화돼 있지 않고 목록 행 제목 접두 "[YYYY년도 - S학기]"에만
+#     있으므로 목록에서 받아 상세에 넘긴다(소프트콘이 term/category를 목록→상세로 넘기는 것과 동일).
+#   - 소프트콘과 동일한 details 스키마(uid/term/title/category/teamInfo/...)로 맞춰
+#     기존 get_paran_details→download_image→post_to_api/save_to_db/save_csv 를 그대로 재사용한다.
 
-def paran_source_uid(no: str, team: str) -> str:
-    # 파란엔 고정 id가 없다. 팀명을 소스 키로 쓰되 소프트콘 숫자 uid와 겹치지 않게
+def paran_source_uid(article_no) -> str:
+    # articleNo는 게시글 고정 id → 안정적 소스 키. 소프트콘 숫자 uid와 겹치지 않게
     # "paran-"로 네임스페이싱한다(백엔드 dedup 키는 (source_uid, term)).
-    # ponytail: 한 학기 내 팀명이 유일하다고 가정. 중복 시 뒷 행이 덮어씀 — 실제로 거의 없음.
-    key = " ".join((team or "").split()) or f"no{no}"
-    uid = f"paran-{key}"
-    if len(uid) > 100:  # source_uid 컬럼 길이(100) 초과 방지
-        uid = "paran-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
-    return uid
+    return f"paran-{str(article_no).strip()}"
 
 
-def get_paran_terms() -> list[str]:
-    # 학기 목록. 보정 노브: CRAWL_TERMS 로 수동 지정 가능(예: "2024-1,2024-2").
+def _paran_term(text: str) -> str:
+    # 목록 제목 접두 "[2024년도 - 1학기]" → "2024-1". 소프트콘 term 포맷과 동일.
+    m = re.search(r"(\d{4})\D+?(\d)\s*학기", text or "")
+    return f"{m.group(1)}-{m.group(2)}" if m else ""
+
+
+def parse_paran_list(html: str) -> list[dict]:
+    # 네트워크와 분리된 순수 파서(테스트 가능). 목록 한 페이지 → 행 목록.
+    # 빈 목록([])이면 호출부가 페이징을 멈춘다.
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    rows = []
+    for a in soup.select("a.b-title"):
+        m = re.search(r"articleNo=(\d+)", a.get("href", ""))
+        if not m:
+            continue
+        article_no = m.group(1)
+        full = a.get_text(" ", strip=True)           # "[YYYY년도 - S학기] 팀명"
+        term = _paran_term(full)
+        team = re.sub(r"\[[^\]]*\]", "", full).strip()  # [학기]·[수상] 접두 제거 → 팀명
+        li = a.find_parent("li")
+        text_box = li.select_one(".b-text-box") if li else None
+        title = text_box.get_text(" ", strip=True) if text_box else team  # 도전과제명
+        img = li.select_one(".b-img-box img") if li else None
+        image = urljoin(PARAN_BASE + "/", img.get("src")) if img and img.get("src") else None
+        rows.append({
+            "articleNo": article_no,
+            "url": f"{PARAN_CONF_URL}?mode=view&articleNo={article_no}",
+            "term": term,
+            "teamName": team,
+            "title": title,
+            "representativeImage": image,
+        })
+    return rows
+
+
+def get_paran_links() -> list[dict]:
+    # 게시판 전체를 offset 루프로 열거한다. 빈 페이지(행 0건)에서 종료 → 안전한 stop 조건.
     import requests
 
-    env = os.environ.get("CRAWL_TERMS")
-    if env:
-        return [t.strip() for t in env.split(",") if t.strip()]
+    links = []
+    offset = 0
+    while True:
+        params = {"mode": "list", "articleLimit": PARAN_PAGE_SIZE, "article.offset": offset}
+        try:
+            res = requests.get(PARAN_CONF_URL, params=params, headers=HEADERS, timeout=10)
+            res.raise_for_status()
+        except Exception as e:
+            # 요청 실패 시 조용히 성공 처리하지 않고 경고로 드러낸다(부분 수집).
+            print(f"  [경고] 파란 목록 offset={offset} 요청 실패: {e}")
+            break
+        rows = parse_paran_list(res.text)
+        if not rows:
+            if offset == 0:
+                # 첫 페이지가 비면 구조 변경/차단 가능 → 0건 조용히 성공시키지 않고 경고.
+                print("  [경고] 파란 목록 첫 페이지에서 글을 찾지 못했습니다(구조 변경/차단 가능).")
+            break
+        links.extend(rows)
+        offset += PARAN_PAGE_SIZE
+        time.sleep(DELAY)
+    print(f"  → 파란 게시글 {len(links)}건 발견")
+    return links
 
-    terms = []
+
+def _paran_json(soup, input_id: str) -> dict:
+    # 숨은 input의 value(JSON 문자열)를 파싱. bs4가 HTML 엔티티(&#034;)를 이미 디코드한다.
+    el = soup.find("input", id=input_id)
+    if not el:
+        return {}
     try:
-        res = requests.get(PARAN_LIST_URL.format(term=PARAN_SEED), headers=HEADERS, timeout=10)
-        res.raise_for_status()
-        terms = sorted(set(re.findall(r"/ace/paran/(\d{4}-\d)\.do", res.text)))
-    except Exception as e:
-        print(f"[ERROR] 파란 학기 추출 실패: {e}")
-
-    if not terms:
-        # 소프트콘과 동일 철학: 추출 실패해도 중단하지 않고 범위를 동적 생성한다.
-        cur_year = date.today().year
-        terms = [f"{y}-{s}" for y in range(2016, cur_year + 1) for s in (1, 2)]
-        print(f"[경고] 파란 학기 목록 추출 실패로 폴백합니다. 범위: {terms[0]} ~ {terms[-1]}")
-    return terms
+        return json.loads(el.get("value") or "")
+    except (ValueError, TypeError):
+        return {}
 
 
-def parse_paran_term(term: str) -> list[dict]:
-    # 한 학기 페이지를 받아 표를 details 목록으로 변환.
+def _paran_input(soup, input_id: str) -> str:
+    el = soup.find("input", id=input_id)
+    return (el.get("value") or "").strip() if el else ""
+
+
+def _paran_email(local: str, domain: str) -> str:
+    local = (local or "").strip()
+    domain = (domain or "").strip()
+    return f"{local}@{domain}" if local and domain else ""
+
+
+def parse_paran_detail(html: str, url: str) -> dict:
+    # 상세 페이지 순수 파서. 제목(도전과제명)·팀명·팀장/팀원/지도교수·작품개요·영상.
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    title_el = soup.select_one(".b-title")
+    title = title_el.get_text(" ", strip=True) if title_el else ""
+
+    team_name = ""
+    for h5 in soup.select("h5.h5-tit01"):
+        if h5.get_text(strip=True) == "팀명":
+            p = h5.find_next("p", class_="con-p")
+            if p:
+                team_name = p.get_text(" ", strip=True)
+            break
+
+    # 멤버: 숨은 input의 JSON에서 복원. 이메일 로컬파트/도메인은 사이트가 화면에서만
+    # 마스킹(JS)하므로 원문이 들어있다 → 여기서 원문 이메일을 만들고, 전송 직전 post_to_api가
+    # mask_email()로 마스킹한다(소프트콘과 동일: 백엔드엔 마스킹된 maskedEmail만 나간다).
+    members = []
+    gubun = _paran_input(soup, "etcChar2")
+    if gubun == "personal":
+        nm = _paran_json(soup, "etcChar12")
+        dp = _paran_json(soup, "etcChar10")
+        grade = _paran_input(soup, "etcChar1")
+        pemail = _paran_input(soup, "personalEmail")
+        if (nm.get("personalName") or "").strip():
+            members.append({"role": "신청자", "name": nm["personalName"].strip(),
+                            "department": dp.get("personalDepart", ""), "grade": grade, "email": pemail})
+        if (nm.get("personalProName") or "").strip():
+            members.append({"role": "지도교수", "name": nm["personalProName"].strip(),
+                            "department": dp.get("personalProDepart", ""), "grade": "", "email": ""})
+    else:
+        nm = _paran_json(soup, "etcChar15")   # 이름
+        dp = _paran_json(soup, "etcChar6")    # 학과
+        gr = _paran_json(soup, "etcChar14")   # 학년
+        em = _paran_json(soup, "etcText2")    # 이메일
+        if (nm.get("teamNames0") or "").strip():   # 팀장
+            members.append({"role": "팀장", "name": nm["teamNames0"].strip(),
+                            "department": dp.get("teamDepartment0", ""), "grade": gr.get("teamGrade0", ""),
+                            "email": _paran_email(em.get("teamEmailId"), em.get("teamEmailDomain"))})
+        names = nm.get("teamNamesArr", []) or []
+        depts = dp.get("teamDepartmentArr", []) or []
+        grades = gr.get("teamGradeArr", []) or []
+        mails = em.get("teamMemberEmail", []) or []   # [id0..id8, domain0..domain8]
+        for i, raw in enumerate(names):               # 팀원
+            name = (raw or "").strip()
+            if not name:
+                continue
+            local = mails[i] if i < len(mails) else ""
+            domain = mails[i + 9] if i + 9 < len(mails) else ""
+            members.append({"role": "팀원", "name": name,
+                            "department": depts[i] if i < len(depts) else "",
+                            "grade": grades[i] if i < len(grades) else "",
+                            "email": _paran_email(local, domain)})
+        if (nm.get("teamNames10") or "").strip():      # 지도교수(이메일 없음)
+            members.append({"role": "지도교수", "name": nm["teamNames10"].strip(),
+                            "department": dp.get("teamDepartment10", ""), "grade": "", "email": ""})
+
+    body = soup.select_one(".fr-view")
+    summary = body.get_text("\n", strip=True) if body else ""
+
+    video = ""
+    for iframe in soup.select("iframe"):
+        src = iframe.get("src", "")
+        if "youtube" in src or "youtu.be" in src:
+            video = src
+            break
+
+    return {
+        "url": url,
+        "title": title,
+        "summary": summary,
+        "description": "",
+        "videoUrl": video,
+        "teamInfo": {"teamName": team_name, "members": members},
+    }
+
+
+def get_paran_details(url: str) -> dict:
+    # 상세 페이지를 받아 파싱. 실패하면 소프트콘과 동일하게 error dict 반환(호출부가 skip).
     import requests
 
-    url = PARAN_LIST_URL.format(term=term)
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
         res.raise_for_status()
     except Exception as e:
-        print(f"  [경고] {term} 요청 실패: {e}")
-        return []
-    return parse_paran_rows(term, url, res.text)
+        print(f"  [ERROR] {url} → {e}")
+        return {"url": url, "error": str(e)}
+    return parse_paran_detail(res.text, url)
 
 
-def parse_paran_rows(term: str, url: str, html: str) -> list[dict]:
-    # 네트워크와 분리된 순수 파서(테스트 가능). 표 행 → details 목록.
-    from bs4 import BeautifulSoup
+def collect_paran(max_n) -> tuple[list[dict], int]:
+    # 파란: 목록(offset 페이징) 수집 → 상세 파싱 → 대표 이미지 다운로드. 소프트콘 collect와 동형.
+    links = get_paran_links()
+    if not links:
+        print("프로젝트 링크를 찾을 수 없습니다.")
+        return [], 0
 
-    soup = BeautifulSoup(html, "html.parser")
-    for t in soup(["script", "style"]):
-        t.decompose()
+    os.makedirs(DATA_DIR, exist_ok=True)
+    links_path = os.path.join(DATA_DIR, "project_links.json")
+    with open(links_path, "w", encoding="utf-8") as f:
+        json.dump(links, f, ensure_ascii=False, indent=2)
+    print(f"[OK] 링크 저장 → {links_path}")
 
-    table = soup.select_one(".content table") or soup.find("table")
-    rows = []
-    if table:
-        rows = table.select("tbody tr") or [r for r in table.select("tr") if r.find("td")]
-
-    if not rows:
-        # 방화벽/구조 변경 등으로 표가 없으면 0건 조용히 성공시키지 않고 경고로 드러낸다.
-        print(f"  [경고] {term}: 프로젝트 표를 찾지 못했습니다(구조 변경/차단 가능).")
-        return []
-
-    projects = []
-    for r in rows:
-        cells = [c.get_text(" ", strip=True) for c in r.find_all("td")]
-        if len(cells) < 3:
-            continue
-        no, team, title = cells[0], cells[1], cells[2].strip()
-        headcount = cells[3] if len(cells) > 3 else ""
-        if not title:  # 제목 없는 행은 건너뛴다("제목 없음" 쓰레기 방지)
-            continue
-
-        content_lines = []
-        if team:
-            content_lines.append(f"팀명: {team}")
-        if headcount:
-            content_lines.append(f"인원수: {headcount}")
-        content_lines.append(f"원본 URL: {url}")
-        content_lines.append(f"학기: {term}")
-
-        projects.append({
-            "uid": paran_source_uid(no, team),
-            "term": term,
-            "title": title,
-            "summary": "",
-            "description": "",
-            "content": "\n".join(content_lines),
-            "url": url,
-            "category": PARAN_CATEGORY,
-            "teamInfo": {},   # 파란엔 개별 멤버 정보가 없음 → members 빈 배열
-        })
-    return projects
-
-
-def collect_paran() -> list[dict]:
-    terms = get_paran_terms()
-    print(f"  → 파란 학기 목록: {terms}")
+    targets = links[:max_n] if max_n is not None else links
     details_list = []
-    for i, term in enumerate(terms):
-        items = parse_paran_term(term)
-        print(f"[{term}] {len(items)}개")
-        details_list.extend(items)
-        if i < len(terms) - 1:
+    img_count = 0
+
+    for i, link in enumerate(targets, start=1):
+        print(f"\n[{i}/{len(targets)}] {link['title']}")
+        details = get_paran_details(link["url"])
+        # 상세 요청이 실패하면 uid 없는 "제목 없음" 건이 적재되므로 건너뛴다.
+        if details.get("error"):
+            print("  [SKIP] 상세 수집 실패")
+            continue
+
+        # 목록에서만 얻는 값(uid/term/대표이미지)을 상세에 병합.
+        details["uid"] = paran_source_uid(link["articleNo"])
+        details["term"] = link["term"]
+        details["category"] = PARAN_CATEGORY
+        details["representativeImage"] = link.get("representativeImage")
+        if not details.get("title"):   # 도전과제명이 비면 목록 제목/팀명으로 폴백
+            details["title"] = link.get("title") or link.get("teamName") or "제목 없음"
+        if not details["teamInfo"].get("teamName"):
+            details["teamInfo"]["teamName"] = link.get("teamName", "")
+        details_list.append(details)
+
+        # 이미지 다운로드(목록 썸네일). 소프트콘과 동일 경로 재사용.
+        img_url = details.get("representativeImage")
+        if img_url and details.get("uid"):
+            saved = download_image(img_url, details["uid"], IMAGE_DIR)
+            if saved:
+                details["localImage"] = saved
+                img_count += 1
+                print(f"  이미지 저장: {os.path.basename(saved)}")
+
+        if i < len(targets):
             time.sleep(DELAY)
+
     print(f"  → 총 {len(details_list)}개 파란학기제 프로젝트 수집")
-    return details_list
+    return details_list, img_count
 
 
 # 3. 대표 이미지 다운로드
@@ -893,10 +1021,7 @@ def main():
 
     # 1~2. 소스별 수집 (둘 다 아래 동일 싱크로 흐른다)
     if CRAWL_SOURCE == "paran":
-        details_list = collect_paran()
-        if max_n is not None:
-            details_list = details_list[:max_n]
-        img_count = 0
+        details_list, img_count = collect_paran(max_n)
     else:
         details_list, img_count = collect_softcon(max_n)
 
