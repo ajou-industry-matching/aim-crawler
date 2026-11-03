@@ -20,6 +20,16 @@ from urllib.parse import urljoin
 BASE_URL     = "https://softcon.ajou.ac.kr"
 DELAY        = 1.0   # 요청 간 대기 시간 (초)
 MAX_PROJECTS = None  # 한 번에 크롤링할 최대 프로젝트 수 (None이면 무제한)
+
+# 수집 소스 선택: "softcon"(기본) 또는 "paran"(대학혁신단 파란학기제).
+# 둘 다 동일한 백엔드 API 싱크(post_to_api)로 보낸다.
+CRAWL_SOURCE = os.environ.get("CRAWL_SOURCE", "softcon").strip().lower()
+
+# 파란학기제: 학기별 페이지에 프로젝트가 표로 인라인(상세 페이지 없음, JS 아님).
+PARAN_BASE     = "https://www.ajou.ac.kr"
+PARAN_LIST_URL = PARAN_BASE + "/ace/paran/{term}.do"
+PARAN_SEED     = "2025-1"       # 학기 목록 자동 추출용 시드(모든 학기 링크가 nav에 있음)
+PARAN_CATEGORY = "파란학기제"   # 소프트콘 단일문자 코드와 구분되는 소스 라벨
 # ─────────────────────────────────────────────
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -270,6 +280,125 @@ def get_project_details(project_url: str) -> dict:
     except Exception as e:
         print(f"  [ERROR] {project_url} → {e}")
         return {"url": project_url, "error": str(e)}
+
+
+# 2-b. 파란학기제(대학혁신단) 수집
+#   - 학기 페이지(/ace/paran/{term}.do)에 프로젝트가 표로 전부 인라인된다.
+#   - 상세 페이지/이미지/깃·영상 링크가 없으므로 목록 파싱이 곧 상세 수집이다.
+#   - 소프트콘과 동일한 details 스키마(uid/term/title/category/content...)로 맞춰
+#     기존 post_to_api / save_to_db / save_csv 를 그대로 재사용한다.
+
+def paran_source_uid(no: str, team: str) -> str:
+    # 파란엔 고정 id가 없다. 팀명을 소스 키로 쓰되 소프트콘 숫자 uid와 겹치지 않게
+    # "paran-"로 네임스페이싱한다(백엔드 dedup 키는 (source_uid, term)).
+    # ponytail: 한 학기 내 팀명이 유일하다고 가정. 중복 시 뒷 행이 덮어씀 — 실제로 거의 없음.
+    key = " ".join((team or "").split()) or f"no{no}"
+    uid = f"paran-{key}"
+    if len(uid) > 100:  # source_uid 컬럼 길이(100) 초과 방지
+        uid = "paran-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    return uid
+
+
+def get_paran_terms() -> list[str]:
+    # 학기 목록. 보정 노브: CRAWL_TERMS 로 수동 지정 가능(예: "2024-1,2024-2").
+    import requests
+
+    env = os.environ.get("CRAWL_TERMS")
+    if env:
+        return [t.strip() for t in env.split(",") if t.strip()]
+
+    terms = []
+    try:
+        res = requests.get(PARAN_LIST_URL.format(term=PARAN_SEED), headers=HEADERS, timeout=10)
+        res.raise_for_status()
+        terms = sorted(set(re.findall(r"/ace/paran/(\d{4}-\d)\.do", res.text)))
+    except Exception as e:
+        print(f"[ERROR] 파란 학기 추출 실패: {e}")
+
+    if not terms:
+        # 소프트콘과 동일 철학: 추출 실패해도 중단하지 않고 범위를 동적 생성한다.
+        cur_year = date.today().year
+        terms = [f"{y}-{s}" for y in range(2016, cur_year + 1) for s in (1, 2)]
+        print(f"[경고] 파란 학기 목록 추출 실패로 폴백합니다. 범위: {terms[0]} ~ {terms[-1]}")
+    return terms
+
+
+def parse_paran_term(term: str) -> list[dict]:
+    # 한 학기 페이지를 받아 표를 details 목록으로 변환.
+    import requests
+
+    url = PARAN_LIST_URL.format(term=term)
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        res.raise_for_status()
+    except Exception as e:
+        print(f"  [경고] {term} 요청 실패: {e}")
+        return []
+    return parse_paran_rows(term, url, res.text)
+
+
+def parse_paran_rows(term: str, url: str, html: str) -> list[dict]:
+    # 네트워크와 분리된 순수 파서(테스트 가능). 표 행 → details 목록.
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup(["script", "style"]):
+        t.decompose()
+
+    table = soup.select_one(".content table") or soup.find("table")
+    rows = []
+    if table:
+        rows = table.select("tbody tr") or [r for r in table.select("tr") if r.find("td")]
+
+    if not rows:
+        # 방화벽/구조 변경 등으로 표가 없으면 0건 조용히 성공시키지 않고 경고로 드러낸다.
+        print(f"  [경고] {term}: 프로젝트 표를 찾지 못했습니다(구조 변경/차단 가능).")
+        return []
+
+    projects = []
+    for r in rows:
+        cells = [c.get_text(" ", strip=True) for c in r.find_all("td")]
+        if len(cells) < 3:
+            continue
+        no, team, title = cells[0], cells[1], cells[2].strip()
+        headcount = cells[3] if len(cells) > 3 else ""
+        if not title:  # 제목 없는 행은 건너뛴다("제목 없음" 쓰레기 방지)
+            continue
+
+        content_lines = []
+        if team:
+            content_lines.append(f"팀명: {team}")
+        if headcount:
+            content_lines.append(f"인원수: {headcount}")
+        content_lines.append(f"원본 URL: {url}")
+        content_lines.append(f"학기: {term}")
+
+        projects.append({
+            "uid": paran_source_uid(no, team),
+            "term": term,
+            "title": title,
+            "summary": "",
+            "description": "",
+            "content": "\n".join(content_lines),
+            "url": url,
+            "category": PARAN_CATEGORY,
+            "teamInfo": {},   # 파란엔 개별 멤버 정보가 없음 → members 빈 배열
+        })
+    return projects
+
+
+def collect_paran() -> list[dict]:
+    terms = get_paran_terms()
+    print(f"  → 파란 학기 목록: {terms}")
+    details_list = []
+    for i, term in enumerate(terms):
+        items = parse_paran_term(term)
+        print(f"[{term}] {len(items)}개")
+        details_list.extend(items)
+        if i < len(terms) - 1:
+            time.sleep(DELAY)
+    print(f"  → 총 {len(details_list)}개 파란학기제 프로젝트 수집")
+    return details_list
 
 
 # 3. 대표 이미지 다운로드
@@ -672,7 +801,7 @@ def post_to_api(details_list: list[dict]) -> int:
             "title": d.get("title") or "제목 없음",
             "summary": d.get("summary", ""),
             "description": d.get("description", ""),
-            "content": build_post_content(content_source),
+            "content": d.get("content") or build_post_content(content_source),
             "url": d.get("url"),
             "presentationUrl": d.get("presentationUrl"),
             "videoUrl": d.get("videoUrl"),
@@ -711,20 +840,12 @@ def post_to_api(details_list: list[dict]) -> int:
 
 # 메인
 
-def main():
-    print("=" * 50)
-    print("  소프트콘 작품 크롤러")
-    print("=" * 50)
-
-    # 환경변수에서 설정값을 읽어옴 (Cloud Run용)
-    max_n_env = os.environ.get("MAX_PROJECTS")
-    max_n = int(max_n_env) if max_n_env else MAX_PROJECTS
-
-    # 1. 링크 수집
+def collect_softcon(max_n) -> tuple[list[dict], int]:
+    # 소프트콘: 목록(AJAX) 수집 → 상세 페이지 파싱 → 대표 이미지 다운로드.
     projects = get_all_project_links()
     if not projects:
         print("프로젝트 링크를 찾을 수 없습니다.")
-        return
+        return [], 0
 
     os.makedirs(DATA_DIR, exist_ok=True)
     links_path = os.path.join(DATA_DIR, "project_links.json")
@@ -732,7 +853,6 @@ def main():
         json.dump(projects, f, ensure_ascii=False, indent=2)
     print(f"[OK] 링크 저장 → {links_path}")
 
-    # 2. 상세 정보 수집
     targets      = projects[:max_n] if max_n is not None else projects
     details_list = []
     img_count    = 0
@@ -758,6 +878,33 @@ def main():
 
         if i < len(targets):
             time.sleep(DELAY)
+
+    return details_list, img_count
+
+
+def main():
+    print("=" * 50)
+    print(f"  AIM 크롤러 (source={CRAWL_SOURCE})")
+    print("=" * 50)
+
+    # 환경변수에서 설정값을 읽어옴 (Cloud Run용)
+    max_n_env = os.environ.get("MAX_PROJECTS")
+    max_n = int(max_n_env) if max_n_env else MAX_PROJECTS
+
+    # 1~2. 소스별 수집 (둘 다 아래 동일 싱크로 흐른다)
+    if CRAWL_SOURCE == "paran":
+        details_list = collect_paran()
+        if max_n is not None:
+            details_list = details_list[:max_n]
+        img_count = 0
+    else:
+        details_list, img_count = collect_softcon(max_n)
+
+    if not details_list:
+        print("수집된 프로젝트가 없습니다.")
+        return
+
+    os.makedirs(DATA_DIR, exist_ok=True)
 
     # 3. JSON 저장
     details_path = os.path.join(DATA_DIR, "project_details.json")
